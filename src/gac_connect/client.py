@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import random
 import threading
 import time
@@ -60,6 +61,7 @@ from .errors import (
     AuthExpiredError,
     CaptchaError,
     CommandError,
+    GacError,
     LoginError,
     PinRequiredError,
     RateLimitedError,
@@ -76,6 +78,7 @@ from .signing import IOV_FIELDS, MAIN_FIELDS, sign
 # One token refresh at a time in the process, so clients sharing a session (and a
 # store) never spend the same single-use refresh token twice.
 _REFRESH_GATE = threading.Lock()
+_LOGGER = logging.getLogger(__name__)
 
 
 def _request_id() -> str:
@@ -159,31 +162,34 @@ class GacClient:
 
     # ---- low-level transport --------------------------------------------
     async def _post(self, host: str, path: str, wrapper: dict, headers: dict, kind: str = "request") -> Any:
-        url = f"https://{host}{path}"
-        timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
-        async with AsyncExitStack() as held:
-            for limiter in self._limiters:
-                await held.enter_async_context(limiter.slot(kind))
-            async with self._http.post(url, data=_dumps(wrapper), headers=headers, timeout=timeout,
-                                       allow_redirects=False, raise_for_status=False) as resp:
-                if resp.status == 429:
-                    seconds = parse_retry_after(resp.headers.get("Retry-After"))
-                    pause = max(limiter.block(seconds) for limiter in self._limiters)
-                    raise RateLimitedError("the service rate-limited the request", retry_after=pause)
-                if 300 <= resp.status < 400:
-                    raise CommandError(f"unexpected redirect ({resp.status}) from {path}; not followed")
-                if resp.status >= 400:
-                    raise ResponseError(f"HTTP {resp.status} from {path}")
-                raw = await resp.read()
         try:
-            outer = _loads(raw)
-        except ValueError as exc:
-            raise CommandError(f"non-JSON response ({resp.status}) from {path}") from exc
-        if isinstance(outer, dict) and outer.get("encryptData"):
-            plain = decrypt_envelope(outer, self._response_key(host))
-            if plain is not None:
-                return plain
-        return outer
+            url = f"https://{host}{path}"
+            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
+            async with AsyncExitStack() as held:
+                for limiter in self._limiters:
+                    await held.enter_async_context(limiter.slot(kind))
+                async with self._http.post(url, data=_dumps(wrapper), headers=headers, timeout=timeout,
+                                           allow_redirects=False, raise_for_status=False) as resp:
+                    if resp.status == 429:
+                        seconds = parse_retry_after(resp.headers.get("Retry-After"))
+                        pause = max(limiter.block(seconds) for limiter in self._limiters)
+                        raise RateLimitedError("the service rate-limited the request", retry_after=pause)
+                    if 300 <= resp.status < 400:
+                        raise CommandError(f"unexpected redirect ({resp.status}) from {path}; not followed")
+                    if resp.status >= 400:
+                        raise ResponseError(f"HTTP {resp.status} from {path}")
+                    raw = await resp.read()
+            try:
+                outer = _loads(raw)
+            except ValueError as exc:
+                raise CommandError(f"non-JSON response ({resp.status}) from {path}") from exc
+            if isinstance(outer, dict) and outer.get("encryptData"):
+                plain = decrypt_envelope(outer, self._response_key(host))
+                if plain is not None:
+                    return plain
+            return outer
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise ResponseError("Could not reach GAC") from err
 
     def _response_key(self, host: str):
         return (self._m.main if host == self._cfg["main"] else self._m.iov_response).private
@@ -314,10 +320,14 @@ class GacClient:
         """
         if not (self._session.main_token and self._session.main_refresh_token):
             return
-        resp = await self._main_call(
-            "/iam/api/user/token/refresh/sec", {"refreshToken": self._session.main_refresh_token},
-            authorization=self._session.main_token,
-        )
+        try:
+            resp = await self._main_call(
+                "/iam/api/user/token/refresh/sec", {"refreshToken": self._session.main_refresh_token},
+                authorization=self._session.main_token,
+            )
+        except (GacError, aiohttp.ClientError, TimeoutError):
+            _LOGGER.warning("Account rotation failed; sign-in is usable but later app sign-in may end it")
+            return
         d = self._data(resp)
         if self._ok(resp) and isinstance(d, dict) and d.get("token"):
             self._session.main_token = d["token"]

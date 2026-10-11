@@ -151,3 +151,20 @@ def test_rejection_does_not_invalidate_a_concurrently_rotated_token():
         assert client.session.access_valid
         assert client.session.token == "new"
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("error", [TimeoutError(), __import__("aiohttp").ClientConnectionError(), GacError("outage")])
+def test_optional_account_rotation_failure_keeps_successful_login(error):
+    from unittest.mock import AsyncMock
+    client, _http, store = make_client(Response())
+    client._session.main_token = "main"
+    client._session.main_refresh_token = "main-refresh"
+    client._main_call = AsyncMock(side_effect=[{"success": True, "data": "ticket"}, error])
+    client._iov_call = AsyncMock(return_value={"data": {"token": "new", "refreshToken": "next",
+                                                       "expireTime": 10**14, "rexpireTime": 10**14}})
+    async def run():
+        await client._establish_iov()
+        assert client.session.access_valid
+        assert (await store.load()).refresh_token == "next"
+        assert not client._auth_dead
+    asyncio.run(run())

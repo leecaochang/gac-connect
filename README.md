@@ -199,8 +199,10 @@ spent-token rejection requires signing in again.
 
 ### Running alongside the official app
 
-Signing in here signs the phone app out, once. Sign the app back in and both keep
-working.
+Signing in here can sign the phone app out. The client attempts an account-token
+rotation after creating the vehicle session so later app sign-ins can coexist.
+If that optional step fails, vehicle sign-in still succeeds and logs a warning;
+a later app sign-in may end that session. Behavior remains region-dependent.
 
 Signing in mints two things: an account session on the main API and a vehicle
 session on the IoV gateway. The account is allowed one current account session,
@@ -211,8 +213,8 @@ signs back in.
 A vehicle session is ended along with the account token that minted it, unless
 that token has since been refreshed. So straight after minting the vehicle
 session, sign-in refreshes the account token once, as the app itself routinely
-does. From then on the phone app signing in cannot reach this library's vehicle
-session, which refreshes itself for as long as it is used.
+does. After a successful rotation, this has allowed the vehicle session to outlive
+later app sign-ins in tested regions. It is not a guarantee for every backend.
 
 Versions before 0.3.0b1 skipped that step, so a session they minted was ended by
 the next app sign-in — in Home Assistant, a re-authentication followed by signing
