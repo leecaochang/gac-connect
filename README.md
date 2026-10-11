@@ -46,7 +46,8 @@ async def main():
         status = await client.get_status(vehicles[0].vin)
         print(status.soc, status.range_km, status.odometer_km)
 
-        await client.charge_pause(vehicles[0].vin)
+        # Optional: choose an explicit daily charging window.
+        await client.set_charge_window(vehicles[0].vin, "23:00", "05:00")
 ```
 
 Pass a `TokenStore` to persist the session (the refresh token is single-use and
@@ -64,7 +65,7 @@ await client.load()
 gac login --mobile 04xxxxxxxx     # opens a browser puzzle, then asks for the SMS code
 gac vehicles
 gac status <VIN>
-gac charge <VIN> pause            # or: now
+gac charge <VIN> now              # unrestricted charging when plugged in
 ```
 
 ## What you can read
@@ -214,10 +215,11 @@ back in on the phone signed the integration out again. Re-authenticate once on
 
 ## Charging control
 
-`charge_now`, `charge_pause`, and `set_charge_window` gate charging through the
-car's schedule. The car applies commands asynchronously: pausing usually takes
-effect quickly, resuming can take several minutes and may be delayed or fail — so
-pause only for sustained periods.
+`charge_now` and `set_charge_window` control the car's charging schedule.
+The car applies commands asynchronously; acceptance does not confirm execution.
+Continuous pause is unavailable: `charge_pause`, `pause_operation` and CLI
+`gac charge <VIN> pause` raise an error without sending a request. The previous
+operation allowed charging every day from 03:00 to 03:30 and was not a true stop.
 
 ## Request limits
 

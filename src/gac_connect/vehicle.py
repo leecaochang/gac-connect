@@ -4,9 +4,8 @@ The gateway has no plain "start" / "stop"; charging is gated through the schedul
 
 * **charge now** — mode 0 (free): charge whenever plugged in. The command
   returns immediately; the car applies it asynchronously and resuming can take
-  several minutes, so pause only for sustained periods.
-* **pause** — mode 1 (scheduled) with a window that excludes the present.
-  Scheduled mode needs both the ms-of-day fields and the absolute start/stop structs.
+  several minutes.
+* **pause** — unavailable until a continuous stop operation is verified.
 * **set window** — mode 1 with a real daily window.
 
 Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64; 0 = every day).
@@ -17,6 +16,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .const import IOV_PREFIX
+from .errors import CommandError
 
 _RESERVATION = f"{IOV_PREFIX}/charging/reservation"
 MODE_FREE = 0
@@ -24,9 +24,10 @@ MODE_SCHEDULED = 1
 END_AT_TIME = 0
 END_AT_SOC = 1
 
-# Fixed off-window used to park the schedule when pausing (03:00–03:30 local).
-_PAUSE_START = (3, 0)
-_PAUSE_STOP = (3, 30)
+PAUSE_UNSUPPORTED = (
+    "Continuous charging pause is unavailable. The previous pause operation allowed "
+    "charging daily from 03:00 to 03:30. Use an explicit charge window instead."
+)
 
 
 def _ms_of_day(hh: int, mm: int) -> int:
@@ -70,11 +71,8 @@ def charge_now_operation(*, until_soc: bool = False) -> dict:
 
 
 def pause_operation(tz: ZoneInfo) -> dict:
-    return _operation(
-        _ms_of_day(*_PAUSE_START), _ms_of_day(*_PAUSE_STOP), 0, MODE_SCHEDULED, END_AT_TIME,
-        start_struct=_struct(_next_local(*_PAUSE_START, tz)),
-        stop_struct=_struct(_next_local(*_PAUSE_STOP, tz)),
-    )
+    """Reject the retired pseudo-pause; retain the API for a clear migration error."""
+    raise CommandError(PAUSE_UNSUPPORTED)
 
 
 def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,

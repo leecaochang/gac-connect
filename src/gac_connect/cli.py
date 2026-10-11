@@ -150,17 +150,17 @@ def status(vin: str, region: str = "AU") -> None:
 
 @app.command()
 def charge(vin: str, action: str, region: str = "AU", timezone: str = "") -> None:
-    """Charge control: action = now | pause. --timezone overrides the region's default."""
+    """Charge control: action = now. Continuous pause is unavailable."""
+    if action == "pause":
+        from .vehicle import PAUSE_UNSUPPORTED
+        raise typer.BadParameter(PAUSE_UNSUPPORTED)
+    if action != "now":
+        raise typer.BadParameter("action must be now; continuous pause is unavailable")
     async def go() -> None:
         async with aiohttp.ClientSession() as http:
             client = _client(http, region, timezone or None)
             await client.load()
-            if action == "now":
-                await client.charge_now(vin)
-            elif action == "pause":
-                await client.charge_pause(vin)
-            else:
-                raise typer.BadParameter("action must be now or pause")
+            await client.charge_now(vin)
             typer.echo(f"charge {action}: accepted")
     asyncio.run(go())
 

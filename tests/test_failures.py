@@ -69,3 +69,23 @@ def test_confirmed_spent_refresh_stays_terminal():
         assert http.post.call_count == 1
 
     asyncio.run(run())
+
+
+def test_pause_never_refreshes_or_sends():
+    from gac_connect.errors import CommandError
+    client, http, _store = make_client(Response())
+    with pytest.raises(CommandError, match="Continuous charging pause"):
+        asyncio.run(client.charge_pause("VIN"))
+    http.post.assert_not_called()
+
+
+def test_cli_pause_fails_before_creating_client(monkeypatch):
+    pytest.importorskip("typer")  # exercised in CI with the CLI extra installed
+    from gac_connect import cli
+    from typer.testing import CliRunner
+    factory = Mock(side_effect=AssertionError("must not build a client"))
+    monkeypatch.setattr(cli, "_client", factory)
+    result = CliRunner().invoke(cli.app, ["charge", "VIN", "pause"])
+    assert result.exit_code != 0
+    assert "Continuous charging pause" in result.output
+    factory.assert_not_called()

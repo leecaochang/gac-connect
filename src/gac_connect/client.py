@@ -492,7 +492,8 @@ class GacClient:
         return await self._reservation(vin, vehicle.charge_now_operation(until_soc=until_soc))
 
     async def charge_pause(self, vin: str) -> Any:
-        return await self._reservation(vin, vehicle.pause_operation(self._zone()))
+        """Unavailable: scheduling a daily window is not a continuous pause."""
+        raise CommandError(vehicle.PAUSE_UNSUPPORTED)
 
     async def set_charge_window(self, vin: str, start: str, stop: str, *,
                                 weekly: int = 0, until_soc: bool = False) -> Any:
