@@ -306,11 +306,20 @@ operation contains Auto, temperature and Celsius units. `climate_off(vin)` uses
 `air_condition/close` with a flat VIN and `operations=[{"enableAutoMode":0}]`.
 Neither command sends the old `airOperationType` marker or -1 airflow fields.
 
+`climate_manual_on(vin, temperature=24, minutes=30, fan_speed=None)` uses the
+same timed open envelope, with `enableAutoMode=0` and `enableAirCompressor=1`.
+With no fan speed it omits `windStrength`, preserving the existing manual blower
+and outlets on the tested Aion UT. An integer `fan_speed` from 1 to 10 selects
+that speed and starts or renews the timed run at the supplied temperature.
+Airflow fields remain absent. Manual startup and changing speed from 3 to 6
+were physically confirmed on that vehicle; other models remain best-effort.
+Use `climate_off` for Off. These operations never retry as an automatic start.
+
 `climate_set_temperature(vin, temperature)` is a separate best-effort partial
 adjustment for running A/C. It sends only temperature and units, with VIN and
 grade in the identifier. It omits Auto, fan speed, airflow, compressor and
 duration; it never falls back to a full automatic start. This partial request
-requires a vehicle test before its behavior can be considered verified.
+was physically confirmed on an Aion UT; other models remain best-effort.
 
 ## Charging control
 

@@ -58,7 +58,8 @@ EQUIPMENT_READINGS = {
 }
 COMMAND_FEATURES = {
     "vehicle-power-off": "vehicle_power_control",
-    "aircon-on": "climate", "aircon-off": "climate", "aircon-temperature": "climate",
+    "aircon-on": "climate", "aircon-manual-on": "climate",
+    "aircon-off": "climate", "aircon-temperature": "climate",
     "fridge-on": "fridge", "fridge-off": "fridge",
     "steering-on": "steering_heat", "steering-off": "steering_heat",
     "sunroof-open": "sunroof", "sunroof-close": "sunroof",

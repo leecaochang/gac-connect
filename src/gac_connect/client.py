@@ -509,6 +509,21 @@ class GacClient:
         t, m = commands.validate_climate(temperature, minutes)
         return await self.command(vin, "aircon-on", temperature=t, currentDuration=m)
 
+    async def climate_manual_on(
+        self, vin: str, *, temperature: float = 24.0, minutes: int = 30, fan_speed: int | None = None
+    ) -> Any:
+        """Start manual A/C, retaining outlets and optionally the existing fan speed.
+
+        When fan_speed is omitted, no blower field is sent. Selecting speed 1–10
+        starts or renews the timed run at the supplied temperature. This request
+        was verified on an Aion UT; other vehicles remain best-effort.
+        """
+        target, duration = commands.validate_climate(temperature, minutes)
+        params = {"temperature": target, "currentDuration": duration}
+        if fan_speed is not None:
+            params["windStrength"] = commands.validate_fan_speed(fan_speed)
+        return await self.command(vin, "aircon-manual-on", **params)
+
     async def climate_off(self, vin: str) -> Any:
         return await self.command(vin, "aircon-off")
 

@@ -49,6 +49,11 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     # climate
     Command("aircon-on", _p("air_condition/open"), "air", stable=True, category="climate",
             description="automatic A/C on", ops=_AIR),
+    # Verified on an Aion UT: omit blower/outlet fields to retain their settings.
+    Command("aircon-manual-on", _p("air_condition/open"), "air", category="climate",
+            description="manual A/C on, optionally selecting fan speed 1–10",
+            ops={"enableAutoMode": 0, "enableAirCompressor": 1,
+                 "temperature": 24.0, "temperatureUnit": 0}),
     Command("aircon-off", _p("air_condition/close"), "flat-ops", stable=True, category="climate",
             description="A/C off", ops={"enableAutoMode": 0}),
     # A partial adjustment omits Auto, compressor, blower and airflow fields.
@@ -135,6 +140,13 @@ def validate_climate(temperature: Any, minutes: Any) -> tuple[float, int]:
     return round(t * 2) / 2, m
 
 
+def validate_fan_speed(speed: Any) -> int:
+    """Accept the ten manual cabin blower speeds; Off uses climate_off instead."""
+    if type(speed) is not int or not 1 <= speed <= 10:
+        raise ValueError("fan speed must be an integer from 1 to 10")
+    return speed
+
+
 def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) -> dict:
     overrides = overrides or {}
     if cmd.kind in ("read", "flat"):
@@ -148,6 +160,8 @@ def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) 
         minutes = operation.pop("currentDuration", 30)
         temperature, duration = validate_climate(operation["temperature"], minutes)
         operation["temperature"] = temperature
+        if cmd.name == "aircon-manual-on" and "windStrength" in operation:
+            operation["windStrength"] = validate_fan_speed(operation["windStrength"])
         identifier = {"vin": vin, "grade": 2}
         if cmd.kind == "air":
             identifier["duration"] = duration
