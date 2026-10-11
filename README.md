@@ -186,6 +186,10 @@ The same applies if a rotation is not saved: `TokenStore.save` is called on ever
 rotation and must durably persist before the next request, which is why the
 default `MemoryStore` is only suitable for a single short-lived process.
 
+Temporary HTTP errors or incomplete refresh responses retain the saved credentials
+and raise a retryable library error. Only an expired refresh token or an explicit
+spent-token rejection requires signing in again.
+
 ### Running alongside the official app
 
 Signing in here signs the phone app out, once. Sign the app back in and both keep

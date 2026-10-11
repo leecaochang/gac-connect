@@ -64,6 +64,7 @@ from .errors import (
     PinRequiredError,
     RateLimitedError,
     RegionError,
+    ResponseError,
     TokenInvalidError,
 )
 from .keys import Material, load_material
@@ -171,6 +172,8 @@ class GacClient:
                     raise RateLimitedError("the service rate-limited the request", retry_after=pause)
                 if 300 <= resp.status < 400:
                     raise CommandError(f"unexpected redirect ({resp.status}) from {path}; not followed")
+                if resp.status >= 400:
+                    raise ResponseError(f"HTTP {resp.status} from {path}")
                 raw = await resp.read()
         try:
             outer = _loads(raw)
@@ -375,7 +378,7 @@ class GacClient:
                         "such as the official app. Sign in again to recover"
                     )
                 if not (isinstance(d, dict) and d.get("token")):
-                    raise AuthExpiredError(f"refresh failed: {_msg(resp)}")
+                    raise ResponseError("refresh response has no usable token; credentials retained")
             except AuthExpiredError:
                 self._auth_dead, self._dead_refresh = True, self._session.refresh_token
                 # Store the dead session without its tokens, so other clients on this

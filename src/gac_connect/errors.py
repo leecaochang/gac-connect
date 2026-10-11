@@ -6,6 +6,10 @@ class GacError(Exception):
     """Base for every error raised by this library."""
 
 
+class ResponseError(GacError):
+    """An HTTP or response-shape failure, not evidence of expired credentials."""
+
+
 class AuthError(GacError):
     """Sign-in could not be completed."""
 
