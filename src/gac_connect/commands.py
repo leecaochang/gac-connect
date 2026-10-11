@@ -7,6 +7,9 @@ are best-effort and may not apply to every model). The body shapes:
 * ``read`` / ``flat`` → ``{"vin": …, **overrides}``
 * ``ops``            → ``{"identifier": {"vin": …}, "operations": [{…ops, **overrides}]}``
 * ``seat``           → ``ops`` with identifier ``grade=2`` and ``duration=30``
+* ``air``            → ``ops`` with identifier ``grade=2`` and the requested duration
+* ``air-adjust``     → ``ops`` with identifier ``grade=2``, without starting a timed run
+* ``flat-ops``       → ``{"vin": …, "operations": [{…ops, **overrides}]}``
 * ``anti``           → ``{"identifier": {"vin": …}, "currentDuration": 30, **overrides}``
 
 PIN-gated commands are listed for completeness but the client refuses them until
@@ -20,15 +23,14 @@ from typing import Any
 
 from .const import IOV_PREFIX
 
-_AIR = {"enableAutoMode": 1, "temperature": 24.0, "temperatureUnit": 0, "currentDuration": 30,
-        "blowingMode": -1, "cyclingMode": -1, "enableAirCompressor": -1}
+_AIR = {"enableAutoMode": 1, "temperature": 24.0, "temperatureUnit": 0}
 
 
 @dataclass(frozen=True)
 class Command:
     name: str
     path: str
-    kind: str              # read | flat | ops | seat | anti
+    kind: str              # read | flat | ops | seat | air | air-adjust | flat-ops | anti
     pin: bool = False
     stable: bool = False
     category: str = ""
@@ -45,10 +47,15 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     Command("status", _p("get_vehicle_status"), "read", stable=True, category="read", description="full telemetry"),
     Command("position", _p("get_position_status"), "read", stable=True, category="read", description="location"),
     # climate
-    Command("aircon-on", _p("air_condition/open"), "ops", stable=True, category="climate",
-            description="A/C on", ops={**_AIR, "airOperationType": "on"}),
-    Command("aircon-off", _p("air_condition/open"), "ops", stable=True, category="climate",
-            description="A/C off", ops={**_AIR, "airOperationType": "off"}),
+    Command("aircon-on", _p("air_condition/open"), "air", stable=True, category="climate",
+            description="automatic A/C on", ops=_AIR),
+    Command("aircon-off", _p("air_condition/close"), "flat-ops", stable=True, category="climate",
+            description="A/C off", ops={"enableAutoMode": 0}),
+    # A partial adjustment omits Auto, compressor, blower and airflow fields.
+    # Its acceptance must be verified on the vehicle; never fall back to Auto.
+    Command("aircon-temperature", _p("air_condition/open"), "air-adjust", category="climate",
+            description="adjust running A/C temperature without requesting Auto",
+            ops={"temperature": 24.0, "temperatureUnit": 0}),
     Command("ventilate-on", _p("ventilate_mode/open"), "flat", stable=True, category="climate",
             description="cabin ventilation on"),
     Command("ventilate-off", _p("ventilate_mode/close"), "flat", category="climate", description="cabin ventilation off"),
@@ -136,6 +143,17 @@ def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) 
         return {"identifier": {"vin": vin}, "currentDuration": 30, **overrides}
     if cmd.kind == "ops":
         return {"identifier": {"vin": vin}, "operations": [{**cmd.ops, **overrides}]}
+    if cmd.kind in ("air", "air-adjust"):
+        operation = {**cmd.ops, **overrides}
+        minutes = operation.pop("currentDuration", 30)
+        temperature, duration = validate_climate(operation["temperature"], minutes)
+        operation["temperature"] = temperature
+        identifier = {"vin": vin, "grade": 2}
+        if cmd.kind == "air":
+            identifier["duration"] = duration
+        return {"identifier": identifier, "operations": [operation]}
+    if cmd.kind == "flat-ops":
+        return {"vin": vin, "operations": [{**cmd.ops, **overrides}]}
     if cmd.kind == "seat":
         return {"identifier": {"vin": vin, "grade": 2, "duration": 30},
                 "operations": [{**cmd.ops, **overrides}]}

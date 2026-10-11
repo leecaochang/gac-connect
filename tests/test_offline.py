@@ -108,7 +108,8 @@ def test_command_bodies():
     from gac_connect.commands import CATALOG, build_body
     assert build_body(CATALOG["status"], "V1") == {"vin": "V1"}
     ac = build_body(CATALOG["aircon-on"], "V1")
-    assert ac["identifier"]["vin"] == "V1" and ac["operations"][0]["airOperationType"] == "on"
+    assert ac == {"identifier": {"vin": "V1", "grade": 2, "duration": 30},
+                  "operations": [{"enableAutoMode": 1, "temperature": 24.0, "temperatureUnit": 0}]}
     assert CATALOG["unlock"].pin is False and CATALOG["lock"].pin is False
 
 

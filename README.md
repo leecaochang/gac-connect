@@ -300,6 +300,18 @@ The app's cabin Heating and Cooling shortcuts set automatic A/C to the maximum
 or minimum temperature. Consumers can use `climate_on` at 32 or 18 °C for those
 shortcuts; the library does not claim a separate heat-only mode.
 
+`climate_on(vin, temperature=24, minutes=30)` uses the app's open request:
+`identifier` contains the VIN, `grade=2` and the requested `duration`; its
+operation contains Auto, temperature and Celsius units. `climate_off(vin)` uses
+`air_condition/close` with a flat VIN and `operations=[{"enableAutoMode":0}]`.
+Neither command sends the old `airOperationType` marker or -1 airflow fields.
+
+`climate_set_temperature(vin, temperature)` is a separate best-effort partial
+adjustment for running A/C. It sends only temperature and units, with VIN and
+grade in the identifier. It omits Auto, fan speed, airflow, compressor and
+duration; it never falls back to a full automatic start. This partial request
+requires a vehicle test before its behavior can be considered verified.
+
 ## Charging control
 
 `charge_now` and `set_charge_window` control the car's charging schedule.

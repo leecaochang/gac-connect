@@ -512,6 +512,15 @@ class GacClient:
     async def climate_off(self, vin: str) -> Any:
         return await self.command(vin, "aircon-off")
 
+    async def climate_set_temperature(self, vin: str, temperature: float) -> Any:
+        """Adjust running A/C without requesting Auto or changing fan/airflow fields.
+
+        This partial operation is best-effort and needs vehicle confirmation.
+        It does not send a duration or automatically retry as a full A/C start.
+        """
+        target, _ = commands.validate_climate(temperature, 30)
+        return await self.command(vin, "aircon-temperature", temperature=target)
+
     async def set_seat_ventilation(self, vin: str, seat: int, enabled: bool) -> Any:
         """Toggle ventilation without changing seat heating or cabin settings.
 
