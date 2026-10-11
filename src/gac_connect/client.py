@@ -409,12 +409,11 @@ class GacClient:
 
     async def get_status(self, vin: str) -> VehicleStatus:
         resp = await self._iov_read(commands.CATALOG["status"].path, {"vin": vin}, sensitive={"vin": vin})
-        results = ((self._data(resp) or {}).get("results") or [{}])[0]
-        return VehicleStatus.from_results(
-            results,
-            online=(self._data(resp) or {}).get("online"),
-            updated_ms=(self._data(resp) or {}).get("updateTime"),
-        )
+        data = self._data(resp)
+        reports = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(reports, list) or not reports or not isinstance(reports[0], dict):
+            raise ResponseError("vehicle status response has no valid report")
+        return VehicleStatus.from_results(reports[0], online=data.get("online"), updated_ms=data.get("updateTime"))
 
     async def get_position(self, vin: str) -> dict:
         resp = await self._iov_read(commands.CATALOG["position"].path, {"vin": vin}, sensitive={"vin": vin})

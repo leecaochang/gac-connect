@@ -78,6 +78,12 @@ temperature and keep-running setting (`status.fridge_mode`, `status.fridge_temp_
 
 ## Fridge
 
+Telemetry keeps unknown values as `None`: a group is closed/locked only when its
+readings establish that state. Malformed fields do not discard unrelated readings.
+`status.tyres` has four stable API-ID slots; `Tyre.position` is `"1"` through `"4"`,
+not an unverified physical corner. Duplicate IDs and paired unreported `-1`
+pressure/temperature values remain unknown. The original report is retained in `raw`.
+
 On cars with a fridge / warmer box:
 
 ```python

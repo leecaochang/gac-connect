@@ -101,7 +101,7 @@ def test_status_decoding():
     assert s.charge_current_a is None       # 1638 placeholder -> None
     assert s.plugged_in is True and s.locked is True
     assert s.door_open is False and s.aux_voltage == 12.4
-    assert s.tyres[0].pressure_kpa == 254.0 and s.tyres[0].position == "front left"
+    assert s.tyres[0].pressure_kpa == 254.0 and s.tyres[0].position == "1"
 
 
 def test_command_bodies():
@@ -196,7 +196,7 @@ def test_fitted_and_time_edges():
         "hatchAccessors": [{"openMode": -1, "hatch": 1}, {"openMode": 0, "hatch": 2}],
         "windowAccessors": [{"openMode": "2"}],
     })
-    assert s.hatch_open is False        # one fitted + closed item -> closed
+    assert s.hatch_open is None         # a partly unknown group is not known closed
     assert s.window_open is True        # numeric strings decode
     assert VehicleStatus.from_results({"hatchAccessors": [{"openMode": "x"}]}).hatch_open is None
     assert _hhmm(0) == "00:00" and _hhmm(86_399_000) == "23:59"
@@ -596,7 +596,7 @@ def test_command_budget_is_separate_and_counted_at_dispatch():
     import asyncio
     import pytest
     from gac_connect.errors import RateLimitedError
-    http = _FakeHttp(_FakeResp(body=b'{"success": true, "data": {}}'))
+    http = _FakeHttp(_FakeResp(body=b'{"success": true, "data": {"results": [{}]}}'))
     lim = _limiter(command_budgets=((60, 2),))
     c = _client(http, lim)
     async def go():
@@ -614,7 +614,7 @@ def test_a_refused_request_does_not_use_up_the_command_budget():
     import asyncio
     import pytest
     from gac_connect.errors import RateLimitedError
-    http = _FakeHttp(_FakeResp(body=b'{"success": true, "data": {}}'))
+    http = _FakeHttp(_FakeResp(body=b'{"success": true, "data": {"results": [{}]}}'))
     lim = _limiter(request_budgets=((60, 1),), command_budgets=((60, 5),))
     c = _client(http, lim)
     async def go():

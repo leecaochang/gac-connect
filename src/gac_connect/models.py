@@ -39,11 +39,13 @@ _MAX_CHARGE_MINUTES = 7 * 24 * 60   # maximum accepted charge duration
 
 
 def _num(v: Any) -> float | None:
+    if isinstance(v, bool):
+        return None
     try:
         f = float(v)
     except (TypeError, ValueError, OverflowError):
         return None
-    return f
+    return f if math.isfinite(f) else None
 
 
 def _finite(v: Any) -> float | None:
@@ -61,12 +63,23 @@ def _exact_int(v: Any) -> int | None:
 
 
 def _first(res: dict, key: str) -> dict:
-    v = res.get(key) or [{}]
-    return v[0] if v else {}
+    items = res.get(key)
+    return items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else {}
 
 
-def _is_open(v: Any) -> bool:
-    return (_num(v) or 0) > 0
+def _items(res: dict, key: str) -> list:
+    items = res.get(key)
+    return items if isinstance(items, list) else []
+
+
+def _enabled(item: dict, flag: str) -> bool:
+    value = item.get(flag, True)
+    return value if isinstance(value, bool) else _exact_int(value) == 1
+
+
+def _bounded(value: Any, low: float, high: float = math.inf) -> float | None:
+    number = _num(value)
+    return number if number is not None and low <= number <= high else None
 
 
 def _hhmm(ms: Any) -> str | None:
@@ -143,11 +156,11 @@ class VehicleStatus:
     # refrigeratorAccessors[].workingMode
     _FRIDGE_MODE = {1: "refrigerate", 2: "heat", 3: "off", 4: "freeze"}
     _FRIDGE_KEEP = {1: "timed", 0: "unlimited"}
-    # tyre report order (positions unverified; documented as such)
-    _TYRE_POS = {1: "front left", 2: "front right", 3: "rear left", 4: "rear right"}
 
     @classmethod
     def from_results(cls, results: dict, *, online: bool | None = None, updated_ms: int | None = None) -> VehicleStatus:
+        if not isinstance(results, dict):
+            raise ValueError("vehicle report must be an object")
         drv = _first(results, "drivingOverviewAccessors")
         chg = _first(results, "chargingAccessors")
         cgr = _first(results, "chargerAccessors")
@@ -163,41 +176,51 @@ class VehicleStatus:
         if keep_minutes is not None and keep_minutes < 0:
             keep_minutes = None
 
-        soc = _num(drv.get("remainElectricityPercentage"))
-        cur = _num(chg.get("chargingCurrent"))
+        soc = _bounded(drv.get("remainElectricityPercentage"), 0, 1)
+        cur = _bounded(chg.get("chargingCurrent"), 0)
         if cur == cls._CURRENT_UNKNOWN:
             cur = None
         est = _num(chg.get("estimatedChargedDuration"))
         if est is not None and not 0 <= est < _MAX_CHARGE_MINUTES:
             est = None   # discard an out-of-range duration
-        volt = _num(chg.get("chargingVoltage")) if chg.get("chargingVoltageFlag", 1) else None
+        volt = _num(chg.get("chargingVoltage")) if _enabled(chg, "chargingVoltageFlag") else None
         if volt is not None and volt <= 0:
             volt = None
         power = round(volt * cur / 1000, 2) if volt is not None and cur is not None and cur >= 0 else None
 
-        doors = results.get("doorAccessors") or []
-        locked = None
-        if doors:
-            locked = all(d.get("lock") == cls._LOCK_LOCKED for d in doors)
+        doors = _items(results, "doorAccessors")
+        codes = [_exact_int(d.get("lock")) if isinstance(d, dict) else None for d in doors]
+        locked = False if 1 in codes else (True if codes and all(code == 0 for code in codes) else None)
 
-        tyres = []
-        for t in results.get("tyreAccessors") or []:
-            idx = t.get("tyre")
-            tyres.append(Tyre(
-                position=cls._TYRE_POS.get(idx, str(idx)),
-                pressure_kpa=_num(t.get("pressure")) if t.get("pressureFlag", 1) else None,
-                temperature_c=_num(t.get("temperature")) if t.get("temperatureFlag", 1) else None,
-            ))
+        # Stable API IDs, not an unverified mapping to physical corners.
+        tyres = [Tyre(str(index), None, None) for index in range(1, 5)]
+        seen: set[int] = set()
+        for item in _items(results, "tyreAccessors"):
+            if not isinstance(item, dict):
+                continue
+            index = _exact_int(item.get("tyre"))
+            if index not in (1, 2, 3, 4):
+                continue
+            if index in seen:
+                tyres[index - 1] = Tyre(str(index), None, None)
+                continue
+            seen.add(index)
+            pressure = _num(item.get("pressure"))
+            temperature = _num(item.get("temperature"))
+            if pressure == -1 and temperature == -1:
+                temperature = None  # paired UT placeholders; -1 C alone is valid
+            if not _enabled(item, "pressureFlag") or (pressure is not None and pressure < 0):
+                pressure = None
+            if not _enabled(item, "temperatureFlag"):
+                temperature = None
+            tyres[index - 1] = Tyre(str(index), pressure, temperature)
 
         def any_open(key: str, sub: str) -> bool | None:
-            """None when the group is absent or no item reports a known state (negative = unknown)."""
-            items = results.get(key)
-            if not items:
-                return None
-            modes = [_num(i.get(sub)) for i in items]
-            if all(m is None or m < 0 for m in modes):
-                return None
-            return any(m is not None and m > 0 for m in modes)
+            items = _items(results, key)
+            modes = [_exact_int(i.get(sub)) if isinstance(i, dict) else None for i in items]
+            if any(mode is not None and mode > 0 for mode in modes):
+                return True
+            return False if modes and all(mode == 0 for mode in modes) else None
 
         # Negative values are "unknown / not fitted" sentinels. A/C is on when the
         # compressor or the fan reports on; off only when both explicitly report off.
@@ -216,35 +239,33 @@ class VehicleStatus:
         lights = _num(light.get("open"))
         if lights is not None and lights < 0:
             lights = None
-        weekly = _num(chg.get("weeklyReservation"))
-        if weekly is not None and not (weekly == weekly and abs(weekly) != float("inf") and weekly == int(weekly)):
-            weekly = None   # only finite, whole-number bitmasks are meaningful
-
-        raw_status = _num(chg.get("chargingStatus"))
-        try:
-            mode = ChargingMode(int(_num(chg.get("chargingMode")))) if chg.get("chargingMode") is not None else None
-        except ValueError:
-            mode = ChargingMode.UNKNOWN
+        weekly = _exact_int(chg.get("weeklyReservation"))
+        if weekly is not None and not 0 <= weekly <= 127:
+            weekly = None
+        mode = _exact_int(chg.get("chargingMode"))
+        stamp = _exact_int(updated_ms)
+        if stamp is not None and not 0 < stamp < 253402300800000:
+            stamp = None
 
         return cls(
-            online=online,
-            updated_ms=updated_ms,
+            online=online if isinstance(online, bool) else {0: False, 1: True}.get(_exact_int(online)),
+            updated_ms=stamp,
             soc=round(soc * 100, 1) if soc is not None else None,
-            range_km=_num(drv.get("remainVoyageCourse")),
-            charging=(raw_status == ChargingStatus.CHARGING) if raw_status is not None else None,
-            charging_mode=mode,
+            range_km=_bounded(drv.get("remainVoyageCourse"), 0),
+            charging={0: False, 2: True}.get(_exact_int(chg.get("chargingStatus"))),
+            charging_mode=ChargingMode(mode) if mode in (0, 1) else None,
             charge_current_a=cur,
             charge_voltage_v=volt,
             charge_power_kw=power,
             estimated_charge_minutes=int(est) if est is not None else None,
-            plugged_in=(cgr.get("plug") == 1) if cgr.get("plug") is not None else None,
-            charger_locked=(cgr.get("lock") == cls._LOCK_LOCKED) if cgr.get("lock") is not None else None,
-            odometer_km=_num(drv.get("totalVoyageCourse")),
+            plugged_in={0: False, 1: True}.get(_exact_int(cgr.get("plug"))),
+            charger_locked={0: True, 1: False}.get(_exact_int(cgr.get("lock"))),
+            odometer_km=_bounded(drv.get("totalVoyageCourse"), 0),
             cabin_temp_c=_num(env.get("temperatureInsideCar")),
-            pm25=_num(env.get("pm25")),
-            aux_voltage=_num(bat.get("voltage")),
-            latitude=_num(pos.get("latitude")),
-            longitude=_num(pos.get("longitude")),
+            pm25=_bounded(env.get("pm25"), 0),
+            aux_voltage=_bounded(bat.get("voltage"), 0),
+            latitude=_bounded(pos.get("latitude"), -90, 90),
+            longitude=_bounded(pos.get("longitude"), -180, 180),
             locked=locked,
             door_open=any_open("doorAccessors", "openMode"),
             window_open=any_open("windowAccessors", "openMode"),
@@ -255,7 +276,7 @@ class VehicleStatus:
             ac_target_temp_c=_num(air.get("temperature")),
             steering_heat_on=(steering > 0) if steering is not None else None,
             lights_on=(lights > 0) if lights is not None else None,
-            fridge_fitted=bool(results.get("refrigeratorAccessors")),
+            fridge_fitted=bool(fridge),
             fridge_mode=cls._FRIDGE_MODE.get(_exact_int(fridge.get("workingMode"))),
             fridge_temp_c=_finite(fridge.get("refrigeratorTemperature")),
             fridge_keep_mode=keep_mode,
