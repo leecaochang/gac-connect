@@ -5,7 +5,7 @@ own, on your own account.
 """
 from __future__ import annotations
 
-from .client import command_session_id
+from .client import GacClient, command_session_id
 from .errors import (
     AuthError,
     AuthExpiredError,
@@ -16,6 +16,7 @@ from .errors import (
     PinRequiredError,
     RateLimitedError,
     RegionError,
+    ResponseError,
 )
 from .limits import DEFAULT_LIMITER, Limiter
 from .push import BrokerInfo, PushClient, PushResult, interpret
@@ -23,6 +24,7 @@ from .push import BrokerInfo, PushClient, PushResult, interpret
 __version__ = "0.4.0b5"
 
 __all__ = [
+    "GacClient",
     "AuthError",
     "DEFAULT_LIMITER",
     "Limiter",
@@ -38,6 +40,7 @@ __all__ = [
     "PinRequiredError",
     "RateLimitedError",
     "RegionError",
+    "ResponseError",
     "__version__",
     "command_session_id",
 ]

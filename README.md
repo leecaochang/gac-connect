@@ -21,10 +21,20 @@ supports is in the region table too, listed but not yet tested — see
 
 ## Install
 
+These examples describe this source checkout, including unreleased audit fixes.
+From the repository root, install it into an isolated Python environment:
+
 ```bash
-pip install gac-connect          # library
-pip install "gac-connect[cli]"   # + the `gac` command
+python -m pip install .          # library from this checkout
+python -m pip install '.[cli]'   # + the `gac` command
 ```
+
+The published beta used by the Home Assistant integration is installed with
+`python -m pip install 'gac-connect==0.4.0b1'` (or
+`'gac-connect[cli]==0.4.0b1'`). It does not include the fixes in this checkout.
+An unqualified `pip install gac-connect` selects a stable release rather than
+opting into betas. Publishing a new library version and changing Home Assistant's
+dependency pin are separate release steps; neither happens by editing this folder.
 
 ## Library
 
@@ -34,7 +44,7 @@ Bare local numbers beginning with `61` retain those digits.
 
 ```python
 import aiohttp
-from gac_connect import GacClient  # noqa
+from gac_connect.client import GacClient  # also works with the published beta
 
 async def main():
     async with aiohttp.ClientSession() as http:
@@ -80,13 +90,13 @@ pressure (in kPa) and temperature, and, where fitted, the fridge's mode, target
 temperature and keep-running setting (`status.fridge_mode`, `status.fridge_temp_c`,
 `status.fridge_keep_mode`, `status.fridge_keep_minutes`).
 
-## Fridge
-
 Telemetry keeps unknown values as `None`: a group is closed/locked only when its
 readings establish that state. Malformed fields do not discard unrelated readings.
 `status.tyres` has four stable API-ID slots; `Tyre.position` is `"1"` through `"4"`,
 not an unverified physical corner. Duplicate IDs and paired unreported `-1`
 pressure/temperature values remain unknown. The original report is retained in `raw`.
+
+## Fridge
 
 On cars with a fridge / warmer box:
 
