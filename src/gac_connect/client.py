@@ -510,6 +510,20 @@ class GacClient:
     async def climate_off(self, vin: str) -> Any:
         return await self.command(vin, "aircon-off")
 
+    async def set_seat_ventilation(self, vin: str, seat: int, enabled: bool) -> Any:
+        """Toggle ventilation without changing seat heating or cabin settings.
+
+        Seat IDs follow the app: 1 driver, 2 front passenger, 3 rear left,
+        4 rear right. Only use seats fitted with ventilation. The app's binary
+        controls send windStrength 1 for on and 0 for off, both with enableWind 1.
+        An accepted request still needs a result or a fresh vehicle report.
+        """
+        if type(seat) is not int or seat not in (1, 2, 3, 4):
+            raise ValueError("seat must be an integer from 1 to 4")
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        return await self.command(vin, f"seat-{seat}-ventilation-{'on' if enabled else 'off'}")
+
     async def fridge_on(self, vin: str, *, mode: str = "refrigerate", temperature: float | None = None) -> Any:
         """Ask the car to run the fridge in ``mode`` ("refrigerate", "heat" or "freeze") at ``temperature`` °C.
 

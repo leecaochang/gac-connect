@@ -164,7 +164,7 @@ class Tyre:
 
 @dataclass
 class Seat:
-    """Stable API seat ID; physical seat names and strength scales are unverified."""
+    """Stable app seat ID: driver, front passenger, rear left, rear right (1–4)."""
 
     position: str
     ventilation_on: bool | None = None
@@ -345,9 +345,12 @@ class VehicleStatus:
                 seats[index - 1] = Seat(str(index))
                 continue
             seen_seats.add(index)
+            enabled = {0: False, 1: True}.get(_exact_int(item.get("enableWind")))
+            strength = _bounded(item.get("windStrength"), 0)
+            if enabled is True and strength is not None:
+                enabled = strength > 0
             seats[index - 1] = Seat(
-                str(index), {0: False, 1: True}.get(_exact_int(item.get("enableWind"))),
-                _bounded(item.get("windStrength"), 0), _bounded(item.get("temperatureStrength"), 0),
+                str(index), enabled, strength, _bounded(item.get("temperatureStrength"), 0),
                 _exact_int(item.get("temperatureMode")),
             )
 

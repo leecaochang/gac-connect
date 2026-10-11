@@ -279,6 +279,22 @@ the next app sign-in — in Home Assistant, a re-authentication followed by sign
 back in on the phone signed the integration out again. Re-authenticate once on
 0.3.0b1 or later to replace such a session.
 
+## Cabin and seat controls
+
+`set_seat_ventilation(vin, seat, enabled)` toggles one fitted seat without changing
+seat heating or cabin A/C settings. IDs follow GAC Android 2.0.32: driver=1, front
+passenger=2, rear left=3, rear right=4. The on/off request uses
+`control_seat_temperature`, an identifier with `grade=2` and `duration=30`, and
+one operation with `enableWind=1` and `windStrength=1` (on) or `0` (off).
+Temperature fields are omitted. A zero strength is decoded as off even when the
+enable flag remains set. Request acceptance is not confirmation of execution.
+The request format was traced in the app; vehicle/trim support needs a real
+command result. Off placeholder telemetry alone does not establish that support.
+
+The app's cabin Heating and Cooling shortcuts set automatic A/C to the maximum
+or minimum temperature. Consumers can use `climate_on` at 32 or 18 °C for those
+shortcuts; the library does not claim a separate heat-only mode.
+
 ## Charging control
 
 `charge_now` and `set_charge_window` control the car's charging schedule.

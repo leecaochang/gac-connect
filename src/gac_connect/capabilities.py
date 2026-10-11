@@ -50,6 +50,8 @@ EQUIPMENT_READINGS = {
     "lights": ("lights_on",),
     "location": ("latitude", "longitude"),
     "ventilation": (), "horn": (), "battery_precondition": (),
+    # Placeholder off reports do not establish that a seat can be controlled.
+    **{f"seat_{i}_ventilation": () for i in range(1, 5)},
 }
 COMMAND_FEATURES = {
     "aircon-on": "climate", "aircon-off": "climate",
@@ -63,6 +65,8 @@ COMMAND_FEATURES = {
     "flash-on": "lights", "flash-off": "lights",
     "ventilate-on": "ventilation", "ventilate-off": "ventilation",
     "horn-on": "horn", "horn-off": "horn", "battery-precondition": "battery_precondition",
+    **{f"seat-{i}-ventilation-{direction}": f"seat_{i}_ventilation"
+       for i in range(1, 5) for direction in ("on", "off")},
 }
 FEATURES = READINGS | EQUIPMENT_READINGS.keys()
 

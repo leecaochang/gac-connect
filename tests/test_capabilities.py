@@ -110,4 +110,10 @@ def test_seat_and_anti_theft_status_do_not_invent_remote_controls():
     assert caps.feature("seat_1_ventilation_on").state is Support.SUPPORTED
     assert caps.feature("seat_2_ventilation_on").state is Support.UNKNOWN
     assert caps.feature("anti_theft_on").state is Support.SUPPORTED
-    assert caps.command("seat-ventilation-on").state is Support.UNKNOWN
+    assert caps.feature("seat_1_ventilation").state is Support.UNKNOWN
+    assert caps.command("seat-1-ventilation-on").state is Support.UNKNOWN
+    caps.confirm_command("seat-1-ventilation-on")
+    assert caps.feature("seat_1_ventilation").source == "confirmed_command"
+    assert caps.command("seat-1-ventilation-on").state is Support.SUPPORTED
+    assert caps.command("seat-1-ventilation-off").state is Support.UNKNOWN
+    assert caps.feature("seat_2_ventilation").state is Support.UNKNOWN

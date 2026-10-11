@@ -6,6 +6,7 @@ are best-effort and may not apply to every model). The body shapes:
 
 * ``read`` / ``flat`` → ``{"vin": …, **overrides}``
 * ``ops``            → ``{"identifier": {"vin": …}, "operations": [{…ops, **overrides}]}``
+* ``seat``           → ``ops`` with identifier ``grade=2`` and ``duration=30``
 * ``anti``           → ``{"identifier": {"vin": …}, "currentDuration": 30, **overrides}``
 
 PIN-gated commands are listed for completeness but the client refuses them until
@@ -27,7 +28,7 @@ _AIR = {"enableAutoMode": 1, "temperature": 24.0, "temperatureUnit": 0, "current
 class Command:
     name: str
     path: str
-    kind: str              # read | flat | ops | anti
+    kind: str              # read | flat | ops | seat | anti
     pin: bool = False
     stable: bool = False
     category: str = ""
@@ -79,6 +80,12 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     Command("power-on", _p("engine/start"), "flat", pin=True, category="power", description="remote power on (PIN)"),
     Command("power-off", _p("engine/stop"), "flat", pin=True, category="power", description="remote power off (PIN)"),
     Command("powerkeep-stop", _p("stop/powerKeep"), "flat", stable=True, category="power", description="stop power-keep"),
+    # GAC 2.0.32 selects ventilation with enableWind=1; strength 0 switches it off.
+    # Leave temperature fields absent so a seat command does not change cabin A/C.
+    *(Command(f"seat-{seat}-ventilation-{direction}", _p("control_seat_temperature"), "seat",
+              category="climate", description=f"seat {seat} ventilation {direction}",
+              ops={"seat": seat, "enableWind": 1, "windStrength": strength})
+      for seat in range(1, 5) for direction, strength in (("on", 1), ("off", 0))),
 ]}
 
 
@@ -126,6 +133,9 @@ def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) 
         return {"identifier": {"vin": vin}, "currentDuration": 30, **overrides}
     if cmd.kind == "ops":
         return {"identifier": {"vin": vin}, "operations": [{**cmd.ops, **overrides}]}
+    if cmd.kind == "seat":
+        return {"identifier": {"vin": vin, "grade": 2, "duration": 30},
+                "operations": [{**cmd.ops, **overrides}]}
     raise ValueError(f"unknown command kind {cmd.kind!r}")
 
 

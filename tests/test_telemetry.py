@@ -170,6 +170,17 @@ def test_seat_ids_flags_and_duplicates_are_not_inferred_from_array_order():
     assert status.seats[1].heating_strength == 0
 
 
+@pytest.mark.parametrize("flag,strength,expected", [
+    (1, 0, False), (1, 1, True), (1, 3, True), (0, 3, False),
+    (1, None, True), (-1, 1, None), (None, 0, None),
+])
+def test_seat_ventilation_off_can_keep_the_enable_flag_set(flag, strength, expected):
+    status = VehicleStatus.from_results({"seatTemperatureAccessors": [
+        {"seat": 1, "enableWind": flag, "windStrength": strength},
+    ]})
+    assert status.seats[0].ventilation_on is expected
+
+
 @pytest.mark.parametrize("value,expected", [(0, False), (1, True), (-1, None), (True, None), (1.5, None)])
 def test_optional_ac_and_anti_theft_flags_preserve_unknown(value, expected):
     status = VehicleStatus.from_results({
