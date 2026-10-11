@@ -168,3 +168,15 @@ def test_optional_account_rotation_failure_keeps_successful_login(error):
         assert (await store.load()).refresh_token == "next"
         assert not client._auth_dead
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("token", None), ("token", True), ("token", {"bad": "value"}), ("token", " "),
+    ("refreshToken", None), ("refreshToken", ""), ("refreshToken", []),
+    ("expireTime", None), ("expireTime", "tomorrow"), ("expireTime", True),
+    ("expireTime", float("nan")), ("rexpireTime", None), ("rexpireTime", float("inf")),
+])
+def test_partial_refresh_cannot_overwrite_complete_credentials(field, value):
+    data = {"token": "new", "refreshToken": "next", "expireTime": 10**14, "rexpireTime": 10**14}
+    data[field] = value
+    test_temporary_refresh_failure_retains_session_and_can_recover(200, {"data": data})

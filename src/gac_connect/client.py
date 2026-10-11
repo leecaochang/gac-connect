@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import math
 import random
 import threading
 import time
@@ -88,6 +89,22 @@ def _request_id() -> str:
 
 def _now_ms() -> str:
     return str(int(time.time() * 1000))
+
+
+def _complete_iov_tokens(data: Any) -> bool:
+    """A partial rotation must never overwrite the last complete credential pair."""
+    if not isinstance(data, dict):
+        return False
+    if not all(isinstance(data.get(key), str) and data[key].strip() for key in ("token", "refreshToken")):
+        return False
+    for key in ("expireTime", "rexpireTime"):
+        value = data.get(key)
+        if type(value) is int and value > 0:
+            continue
+        if isinstance(value, float) and math.isfinite(value) and value > 0:
+            continue
+        return False
+    return True
 
 
 class GacClient:
@@ -389,7 +406,7 @@ class GacClient:
                         "on the same saved session), or the session was ended by a sign-in elsewhere, "
                         "such as the official app. Sign in again to recover"
                     )
-                if not (isinstance(d, dict) and d.get("token")):
+                if not _complete_iov_tokens(d):
                     raise ResponseError("refresh response has no usable token; credentials retained")
             except AuthExpiredError:
                 self._auth_dead, self._dead_refresh = True, self._session.refresh_token
