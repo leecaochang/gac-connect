@@ -5,6 +5,7 @@ own, on your own account.
 """
 from __future__ import annotations
 
+from .capabilities import Capabilities, Support
 from .client import GacClient, command_session_id
 from .errors import (
     AuthError,
@@ -32,6 +33,8 @@ __version__ = "0.4.0b5"
 
 __all__ = [
     "GacClient",
+    "Capabilities",
+    "Support",
     "VehicleStatus",
     "decode_status",
     "doors_locked",

@@ -309,6 +309,21 @@ every few minutes is plenty for most uses.
 
 A Home Assistant integration built on this library is available separately.
 
+`Capabilities(model)` provides passive equipment discovery. Pass decoded reports
+to `observe(status)` and inspect `feature(name)` or `command(name)` for supported,
+unsupported or unknown, with an evidence source. Missing reports do not erase
+positive evidence. UT equipment assumptions are defaults that positive variant
+evidence can correct. Pressure and temperature are tracked independently for each
+tyre. Reading a feature does not establish remote-command support: call
+`confirm_command(name)` only for a successfully applied, correlated user command,
+not its initial acceptance. Opening/closing and on/off are tracked separately.
+
+The detector performs no network requests. No equipment endpoint has been verified
+or added; `observe_equipment` accepts explicit, validated flags supplied by a caller.
+Consumers own manual overrides and can persist the names-only `export_state()`
+snapshot, then `restore()` it for the same vehicle. Snapshots contain no raw
+telemetry, vehicle identifiers or credentials.
+
 Consumers can import `GacClient`, `PushClient`, `decode_status`, `doors_locked`,
 `local_mobile`, `validate_clock`, `validate_weekly`, `window_operation`, and
 `PAUSE_UNSUPPORTED` directly from `gac_connect`. `decode_status` is an alias for
