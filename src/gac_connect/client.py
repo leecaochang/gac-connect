@@ -72,6 +72,7 @@ from .errors import (
 from .keys import Material, load_material
 from .limits import DEFAULT_LIMITER, Limiter, parse_retry_after
 from .models import Vehicle, VehicleStatus
+from .phone import local_mobile
 from .session import MemoryStore, Session, TokenStore
 from .signing import IOV_FIELDS, MAIN_FIELDS, sign
 
@@ -257,11 +258,12 @@ class GacClient:
 
     async def request_sms(self, mobile: str, x: int) -> None:
         """Verify the puzzle at offset ``x`` and send a login code to ``mobile``."""
+        mobile = local_mobile(mobile, self._cfg["tel"])
         c = await self._verify_captcha(x)
         resp = await self._main_call(
             "/support/api/message/verify-code/sms/send-verify-code/sec",
             {"msgBizCode": "userLogin", "countryTelCode": self._cfg["tel"],
-             "mobile": _local_mobile(mobile), "email": "", "captchaType": "blockPuzzle",
+             "mobile": mobile, "email": "", "captchaType": "blockPuzzle",
              "captchaTicket": c.ticket(x), "captchaRandomStr": c.point_json(x),
              "type": 1, "sendType": None},
         )
@@ -276,7 +278,7 @@ class GacClient:
             raise LoginError("request_sms must succeed first")
         resp = await self._main_call("/iam/api/user/login/code/sec", {
             "verifyCodeTicket": ticket, "verifyCode": code, "type": 1,
-            "countryTelCode": self._cfg["tel"], "mobile": _local_mobile(mobile), "email": "",
+            "countryTelCode": self._cfg["tel"], "mobile": local_mobile(mobile, self._cfg["tel"]), "email": "",
             "protocolList": ["COMMON_PRIVACY_POLICY", "COMMON_USER_AGREEMENT"],
         })
         if not self._ok(resp):
@@ -551,13 +553,6 @@ def _msg(resp: Any) -> str:
     if isinstance(resp, dict):
         return str(resp.get("msg") or resp.get("code") or resp)[:200]
     return str(resp)[:200]
-
-
-def _local_mobile(value: str) -> str:
-    digits = "".join(c for c in value if c.isdigit())
-    if digits.startswith("61"):
-        digits = digits[2:]
-    return digits.lstrip("0")
 
 
 def _dumps(obj: Any) -> bytes:

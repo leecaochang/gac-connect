@@ -28,6 +28,10 @@ pip install "gac-connect[cli]"   # + the `gac` command
 
 ## Library
 
+Phone numbers may be local, or international with an explicit `+` or `00`
+prefix matching the selected region. Spaces, hyphens and parentheses are accepted.
+Bare local numbers beginning with `61` retain those digits.
+
 ```python
 import aiohttp
 from gac_connect import GacClient  # noqa
