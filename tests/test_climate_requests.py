@@ -158,3 +158,32 @@ def test_rejected_manual_start_never_falls_back_to_auto():
     client._iov_call.assert_awaited_once()
     assert client._iov_call.await_args.args[1]["operations"][0]["enableAutoMode"] == 0
     http.post.assert_not_called()
+
+
+def test_outlet_candidate_omits_fan_and_recirc_without_changing_start_envelope():
+    client, http, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value=ACCEPTED)
+
+    async def run():
+        await client.load()
+        await client.climate_manual_on("VIN", temperature=23, minutes=5, blowing_mode=2)
+
+    asyncio.run(run())
+    client._iov_call.assert_awaited_once_with(
+        f"{PREFIX}/air_condition/open",
+        {"identifier": {"vin": "VIN", "grade": 2, "duration": 5},
+         "operations": [{"enableAutoMode": 0, "enableAirCompressor": 1,
+                         "temperature": 23, "temperatureUnit": 0, "blowingMode": 2}]},
+        sensitive={"vin": "VIN"}, kind="command",
+    )
+    http.post.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", [0, -1, True, "2", 2.5, float("nan"), float("inf")])
+def test_invalid_outlet_candidate_sends_nothing(mode):
+    client, http, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock()
+    with pytest.raises(ValueError):
+        asyncio.run(client.climate_manual_on("VIN", blowing_mode=mode))
+    client._iov_call.assert_not_awaited()
+    http.post.assert_not_called()

@@ -315,6 +315,18 @@ Airflow fields remain absent. Manual startup and changing speed from 3 to 6
 were physically confirmed on that vehicle; other models remain best-effort.
 Use `climate_off` for Off. These operations never retry as an automatic start.
 
+An optional `blowing_mode` positive integer adds the raw `blowingMode` outlet
+field to `climate_manual_on`, leaving blower and recirculation fields absent
+unless separately selected. On the user's UT, console changes established
+1=cabin, 2=cabin+feet, 3=feet, 5=windscreen and 7=all three. Reading those codes
+does not prove remote writes work; an outlet selection remains best-effort
+until a physical command test confirms it. Selecting an outlet uses the full
+timed start and renews the run at the supplied temperature.
+
+`Seat.ventilation_enable_code` preserves raw `enableWind`, including unknown
+values, for comparing console modes. There is no verified Smart-seat code or
+remote Smart operation. `ventilation_on` keeps its existing calibrated decoding.
+
 `climate_set_temperature(vin, temperature)` is a separate best-effort partial
 adjustment for running A/C. It sends only temperature and units, with VIN and
 grade in the identifier. It omits Auto, fan speed, airflow, compressor and

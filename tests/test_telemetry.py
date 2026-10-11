@@ -189,3 +189,10 @@ def test_optional_ac_and_anti_theft_flags_preserve_unknown(value, expected):
     })
     assert status.ac_auto_on is expected and status.ac_compressor_on is expected
     assert status.anti_theft_on is expected
+
+
+@pytest.mark.parametrize('code,expected', [(0, False), (1, True), (2, None), (-1, None), (None, None)])
+def test_raw_seat_enable_code_is_retained_without_guessing_smart_mode(code, expected):
+    status = VehicleStatus.from_results({'seatTemperatureAccessors': [{'seat': 1, 'enableWind': code, 'windStrength': 1}]})
+    assert status.seats[0].ventilation_enable_code == code
+    assert status.seats[0].ventilation_on is expected

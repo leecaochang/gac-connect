@@ -147,6 +147,13 @@ def validate_fan_speed(speed: Any) -> int:
     return speed
 
 
+def validate_blowing_mode(mode: Any) -> int:
+    """Accept a positive raw outlet code; its meaning is vehicle-specific."""
+    if type(mode) is not int or mode <= 0:
+        raise ValueError("blowing mode must be a positive integer outlet code")
+    return mode
+
+
 def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) -> dict:
     overrides = overrides or {}
     if cmd.kind in ("read", "flat"):
@@ -162,6 +169,8 @@ def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) 
         operation["temperature"] = temperature
         if cmd.name == "aircon-manual-on" and "windStrength" in operation:
             operation["windStrength"] = validate_fan_speed(operation["windStrength"])
+        if cmd.name == "aircon-manual-on" and "blowingMode" in operation:
+            operation["blowingMode"] = validate_blowing_mode(operation["blowingMode"])
         identifier = {"vin": vin, "grade": 2}
         if cmd.kind == "air":
             identifier["duration"] = duration

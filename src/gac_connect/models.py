@@ -172,6 +172,8 @@ class Seat:
     ventilation_strength: float | None = None
     heating_strength: float | None = None
     temperature_mode: int | None = None
+    # Retain uncalibrated values (potentially Smart) without assigning a meaning.
+    ventilation_enable_code: int | None = None
 
 
 @dataclass
@@ -350,13 +352,14 @@ class VehicleStatus:
                 seats[index - 1] = Seat(str(index))
                 continue
             seen_seats.add(index)
-            enabled = {0: False, 1: True}.get(_exact_int(item.get("enableWind")))
+            wind_code = _exact_int(item.get("enableWind"))
+            enabled = {0: False, 1: True}.get(wind_code)
             strength = _bounded(item.get("windStrength"), 0)
             if enabled is True and strength is not None:
                 enabled = strength > 0
             seats[index - 1] = Seat(
                 str(index), enabled, strength, _bounded(item.get("temperatureStrength"), 0),
-                _exact_int(item.get("temperatureMode")),
+                _exact_int(item.get("temperatureMode")), wind_code,
             )
 
         timezone = results.get("timezoneAccessor")
