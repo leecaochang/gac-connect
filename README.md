@@ -75,6 +75,10 @@ await client.load()
 
 ## CLI
 
+The browser puzzle labels its slider and announces verification status. Focus
+the slider to adjust it with arrow keys. The service still requires a visual
+puzzle; a nonvisual verification alternative has not been established.
+
 ```bash
 gac login --mobile 04xxxxxxxx     # opens a browser puzzle, then asks for the SMS code
 gac vehicles
