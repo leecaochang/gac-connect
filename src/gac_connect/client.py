@@ -33,6 +33,7 @@ import dataclasses
 import logging
 import math
 import random
+import re
 import threading
 import time
 from contextlib import AsyncExitStack
@@ -464,8 +465,16 @@ class GacClient:
             {"vin": vin}, sensitive={"vin": vin},
         )
         data = self._data(resp)
-        if not isinstance(resp, dict) or not (self._ok(resp) or resp.get("code") == "0000"):
-            raise ResponseError("vehicle capability query was not accepted")
+        code = resp.get("code") if isinstance(resp, dict) else None
+        # The app's generic read wrapper accepts "0" and other normal success
+        # codes, without requiring the main API's success boolean. Keep async
+        # command-only codes out of this metadata read and do not broaden _ok.
+        success_code = type(code) in (int, str) and str(code) in {"0", "0000", "1000", "2000", "13000"}
+        if (not isinstance(resp, dict) or resp.get("success") is False
+                or not (success_code or (code is None and self._ok(resp)))):
+            safe_code = _safe_result_code(code)
+            detail = f"result code {safe_code}" if safe_code is not None else "no recognized result code"
+            raise ResponseError(f"vehicle capability query was not accepted ({detail})")
         if not isinstance(data, dict):
             raise ResponseError("vehicle capability response has no valid data")
         return data
@@ -649,6 +658,14 @@ def _msg(resp: Any) -> str:
     if isinstance(resp, dict):
         return str(resp.get("msg") or resp.get("code") or resp)[:200]
     return str(resp)[:200]
+
+
+def _safe_result_code(value: Any) -> str | None:
+    """Keep only a bounded gateway code, never an arbitrary response message."""
+    if type(value) not in (int, str):
+        return None
+    code = str(value)
+    return code if re.fullmatch(r"(?:[0-9]{1,8}|[A-Z]{1,12}(?:\.[A-Z]{1,12})?\.[0-9]{1,8})", code) else None
 
 
 def _dumps(obj: Any) -> bytes:

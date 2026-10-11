@@ -334,6 +334,10 @@ first `capabilities` record's `capability.remoteCapability` lists, including
 fields such as `supportBlowingModes` and `enableFrontDefrosterCapability`.
 Their numeric flags are uncalibrated and do not automatically enable controls
 or prove that a command will work. The query is optional, not part of polling.
+The capability read recognizes the app's normal success codes (including `0`),
+without requiring the main API's `success` boolean. Async control-result codes
+are not accepted as metadata-read success. Rejections show a bounded result
+code, without copying API messages, credentials or response data into errors.
 
 `Seat.ventilation_enable_code` preserves raw `enableWind`, including unknown
 values, for comparing console modes. There is no verified Smart-seat code or
