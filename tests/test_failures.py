@@ -181,3 +181,23 @@ def test_partial_refresh_cannot_overwrite_complete_credentials(field, value):
     data = {"token": "new", "refreshToken": "next", "expireTime": 10**14, "rexpireTime": 10**14}
     data[field] = value
     test_temporary_refresh_failure_retains_session_and_can_recover(200, {"data": data})
+
+@pytest.mark.parametrize("error", [TimeoutError(), __import__("aiohttp").ClientConnectionError()])
+def test_transport_error_preserves_credentials_and_allows_later_refresh(error):
+    client, http, store = make_client(Response())
+    http.post.side_effect = [
+        error,
+        Response(body={"data": {"token": "new", "refreshToken": "next", "expireTime": 10**14, "rexpireTime": 10**14}}),
+    ]
+    async def run():
+        await client.load()
+        before = (await store.load()).to_dict()
+        with pytest.raises(GacError) as caught:
+            await client._ensure_token()
+        assert not isinstance(caught.value, AuthExpiredError)
+        assert (await store.load()).to_dict() == before
+        assert not client._auth_dead
+        await client._ensure_token()
+        assert (await store.load()).refresh_token == "next"
+        assert http.post.call_count == 2
+    asyncio.run(run())
