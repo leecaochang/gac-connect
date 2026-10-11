@@ -2,8 +2,9 @@
 
 Missing reports never prove absence. Reading a state does not prove that a
 remote command works. This module performs no I/O and never probes the vehicle.
-Callers may provide explicit equipment flags only from a verified source; the
-current client does not fetch an equipment endpoint.
+Callers may provide explicit equipment flags only from a verified source.
+The optional client capability query returns raw metadata; this passive
+detector does not interpret its uncalibrated numeric flags.
 """
 from __future__ import annotations
 

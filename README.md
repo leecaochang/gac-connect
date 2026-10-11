@@ -318,10 +318,22 @@ Use `climate_off` for Off. These operations never retry as an automatic start.
 An optional `blowing_mode` positive integer adds the raw `blowingMode` outlet
 field to `climate_manual_on`, leaving blower and recirculation fields absent
 unless separately selected. On the user's UT, console changes established
-1=cabin, 2=cabin+feet, 3=feet, 5=windscreen and 7=all three. Reading those codes
-does not prove remote writes work; an outlet selection remains best-effort
-until a physical command test confirms it. Selecting an outlet uses the full
-timed start and renews the run at the supplied temperature.
+1=cabin, 2=cabin+feet, 3=feet, 5=windscreen and 7=all three. Remote requests for
+codes 1–4 were physically confirmed with the car fully on (ready to drive);
+code 4 selected feet + windscreen. Before switching to ready, code 3 had no
+effect. Code 5 was rejected with gateway code 13002 even in the ready state.
+Code 7 has only been observed from console selections; it is not a verified
+remote control. Selecting an outlet uses the full timed start and renews the
+run at the supplied temperature. Other vehicles remain best-effort.
+
+`get_control_capabilities(vin)` reads the app's capability endpoint and returns
+its raw data object. The path is `/iov-vehicle-gateway/v1/iov/vehicle/access_gateway/get_capability`,
+with a flat VIN body; it is a read, not a vehicle control. The app parses the
+first `capabilities` record's `capability.remoteCapability` lists, including
+`airConditionCapabilities` and `seatTemperatureCapabilities`. These contain
+fields such as `supportBlowingModes` and `enableFrontDefrosterCapability`.
+Their numeric flags are uncalibrated and do not automatically enable controls
+or prove that a command will work. The query is optional, not part of polling.
 
 `Seat.ventilation_enable_code` preserves raw `enableWind`, including unknown
 values, for comparing console modes. There is no verified Smart-seat code or
@@ -404,8 +416,9 @@ tyre. Reading a feature does not establish remote-command support: call
 `confirm_command(name)` only for a successfully applied, correlated user command,
 not its initial acceptance. Opening/closing and on/off are tracked separately.
 
-The detector performs no network requests. No equipment endpoint has been verified
-or added; `observe_equipment` accepts explicit, validated flags supplied by a caller.
+The detector performs no network requests. The optional raw capability query is
+separate: its numeric flags are not interpreted as equipment evidence.
+`observe_equipment` accepts explicit, validated flags supplied by a caller.
 Consumers own manual overrides and can persist the names-only `export_state()`
 snapshot, then `restore()` it for the same vehicle. Snapshots contain no raw
 telemetry, vehicle identifiers or credentials.

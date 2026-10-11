@@ -452,6 +452,24 @@ class GacClient:
         resp = await self._iov_read(commands.CATALOG["position"].path, {"vin": vin}, sensitive={"vin": vin})
         return self._data(resp) or {}
 
+    async def get_control_capabilities(self, vin: str) -> dict:
+        """Read the app's raw capability response without issuing a control.
+
+        This endpoint uses ``v1/iov/vehicle``, unlike status/control paths.
+        Numeric capability flags are not yet calibrated; this response must
+        not automatically enable controls or establish a physical effect.
+        """
+        resp = await self._iov_read(
+            "/iov-vehicle-gateway/v1/iov/vehicle/access_gateway/get_capability",
+            {"vin": vin}, sensitive={"vin": vin},
+        )
+        data = self._data(resp)
+        if not isinstance(resp, dict) or not (self._ok(resp) or resp.get("code") == "0000"):
+            raise ResponseError("vehicle capability query was not accepted")
+        if not isinstance(data, dict):
+            raise ResponseError("vehicle capability response has no valid data")
+        return data
+
     async def _iov_read(self, path: str, body: Any, *, sensitive: dict | None = None) -> Any:
         """A read that refreshes-and-retries once on an invalid token."""
         await self._ensure_token()
@@ -518,8 +536,9 @@ class GacClient:
         Omitted fan_speed/blowing_mode fields preserve the vehicle's settings.
         A selection starts or renews the timed run at the supplied temperature.
         Fan speed uses 1–10; outlet codes must be calibrated for the vehicle.
-        Manual startup and fan writes were verified on an Aion UT; outlet writes
-        and other vehicles remain best-effort until physically confirmed.
+        Manual startup and fan writes were verified on an Aion UT. Outlet codes
+        1–4 worked with that car fully on (ready to drive); 3 had no effect
+        before then and 5 was rejected. Other codes/models remain unverified.
         """
         target, duration = commands.validate_climate(temperature, minutes)
         params = {"temperature": target, "currentDuration": duration}
