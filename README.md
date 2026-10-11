@@ -150,6 +150,11 @@ await task
 
 ## Regions
 
+Custom `Material` still accepts the original five constructor arguments. When
+`iov_response` is omitted (or `None`), gateway responses and push messages use
+the `iov` keypair. An explicit response keypair remains separate from the request
+keypair, as required by the UK profile.
+
 `GacClient(region, ...)` takes an ISO country code. The table in
 `gac_connect.const.REGIONS` covers all 56 countries the service is configured
 for, with the two hosts, calling code and time zone each one uses:

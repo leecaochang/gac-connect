@@ -63,7 +63,12 @@ class Material:
     # the same as ``iov``; a profile whose IoV responses come back under a
     # different keypair ships its own ``@iov_response`` block, while still using
     # ``iov``/``iov_hmac`` for the request it sends.
-    iov_response: Keypair = None  # type: ignore[assignment]  # set in load_material
+    iov_response: Keypair | None = None
+
+    def __post_init__(self) -> None:
+        # Preserve the five-argument constructor used before split response keys.
+        if self.iov_response is None:
+            object.__setattr__(self, "iov_response", self.iov)
 
 
 def _load_private(pem_block: str) -> Keypair:

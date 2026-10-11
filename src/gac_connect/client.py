@@ -193,7 +193,7 @@ class GacClient:
             raise ResponseError("Could not reach GAC") from err
 
     def _response_key(self, host: str):
-        return (self._m.main if host == self._cfg["main"] else self._m.iov_response).private
+        return (self._m.main if host == self._cfg["main"] else self._m.iov_response or self._m.iov).private
 
     async def _main_call(self, path: str, body: Any, *, authorization: str | None = None) -> Any:
         wrapper, _, _ = encrypt_envelope(body, self._m.main.public)
@@ -452,7 +452,7 @@ class GacClient:
 
     def decrypt_push(self, envelope: dict) -> Any:
         """Open a message from the push feed (same envelope as gateway responses)."""
-        return decrypt_envelope(envelope, self._m.iov_response.private)
+        return decrypt_envelope(envelope, (self._m.iov_response or self._m.iov).private)
 
     # ---- commands --------------------------------------------------------
     async def command(self, vin: str, name: str, **overrides: Any) -> Any:
