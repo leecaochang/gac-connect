@@ -482,6 +482,8 @@ class GacClient:
             raise CommandError(f"unknown command {name!r}")
         if cmd.pin:
             raise PinRequiredError(f"{name} needs the remote-control PIN, not yet supported")
+        if name == "vehicle-power-off" and overrides:
+            raise CommandError("vehicle shutdown accepts no parameters")
         body = commands.build_body(cmd, vin, overrides)
         return await self._dispatch_command(cmd.path, body, vin)
 

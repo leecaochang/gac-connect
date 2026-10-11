@@ -118,6 +118,11 @@ pressure (in kPa) and temperature, and, where fitted, the fridge's mode, target
 temperature and keep-running setting (`status.fridge_mode`, `status.fridge_temp_c`,
 `status.fridge_keep_mode`, `status.fridge_keep_minutes`).
 
+`status.power_on` decodes `powerAccessors[0].powerMode`: `2` is on and `0` is
+off, verified against paired Aion UT reports. Other codes and missing readings
+remain `None`; `status.power_mode` retains the valid raw integer. This reading
+is independent of cloud connectivity (`status.online`) and cabin A/C.
+
 For model-aware lock decoding, pass `model="Aion UT"` to
 `VehicleStatus.from_results(...)`, or use `gac_connect.models.doors_locked(status, model)`.
 The verified UT pattern (front doors locked, both rear lock readings `-1`) is
@@ -341,7 +346,15 @@ every few minutes is plenty for most uses.
 - Sign-in needs a human: a slide puzzle and an SMS code. There is no headless login.
 - Door locking and unlocking are available. Door unlock does not require a PIN:
   use `await client.unlock(vin)` or `await client.command(vin, "unlock")`.
-  Remote power and charger-release remain PIN-gated and are refused by this client.
+  Engine start/stop (`power-on` / `power-off`) and charger-release remain
+  PIN-gated and are refused by this client.
+- `await client.command(vin, "vehicle-power-off")` uses the separate GAC 2.0.32
+  shutdown path `power/off` with only the VIN. It is best-effort and has not been
+  tested through this client on a vehicle. The user confirmed the app's shutdown
+  prompt works without requesting a PIN. This does not establish support on other
+  models or accounts. Consumers should require an explicit shutdown opt-in and
+  confirm the result from fresh `status.power_on` telemetry. No vehicle-power-on
+  control has been verified for the Aion UT.
 - Using the official app and this client on the same account at the same time can
   occasionally sign one of them out.
 

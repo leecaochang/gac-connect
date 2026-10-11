@@ -79,6 +79,9 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
             description="battery preconditioning", ops={"batteryPretreatmentMode": 1}),
     Command("power-on", _p("engine/start"), "flat", pin=True, category="power", description="remote power on (PIN)"),
     Command("power-off", _p("engine/stop"), "flat", pin=True, category="power", description="remote power off (PIN)"),
+    # The app's vehicle-shutdown branch is separate from its engine start/stop commands.
+    Command("vehicle-power-off", _p("power/off"), "flat", category="power",
+            description="vehicle shutdown (GAC 2.0.32)"),
     Command("powerkeep-stop", _p("stop/powerKeep"), "flat", stable=True, category="power", description="stop power-keep"),
     # GAC 2.0.32 selects ventilation with enableWind=1; strength 0 switches it off.
     # Leave temperature fields absent so a seat command does not change cabin A/C.

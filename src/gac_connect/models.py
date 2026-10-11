@@ -10,6 +10,7 @@ with the gateway's quirks resolved:
 * lock uses the gateway's inverted polarity (0 = locked), decoded to a bool;
 * openMode 0 = closed, >0 = open, negative = unknown;
 * the A/C is "on" when the compressor flag is set or the fan is running;
+* powerMode 0 = off and 2 = on, verified with Aion UT reports; other codes stay unknown;
 * reservations can use calendar fields, Unix milliseconds, or milliseconds-of-day;
   explicit calendar fields take precedence over timestamp clock conversions.
 
@@ -234,6 +235,9 @@ class VehicleStatus:
     charge_time_format: str | None = None
     charge_clock_consistent: bool | None = None
     raw: dict = field(default_factory=dict)
+    # Vehicle power is independent of cloud connectivity and cabin A/C.
+    power_on: bool | None = None
+    power_mode: int | None = None
 
     # gateway "unknown" placeholder for charge current
     _CURRENT_UNKNOWN = 1638.0
@@ -258,6 +262,7 @@ class VehicleStatus:
         steer = _first(results, "steeringAccessors")
         light = _first(results, "lightAccessors")
         theft = _first(results, "antiTheftAccessors")
+        vehicle_power = _exact_int(_first(results, "powerAccessors").get("powerMode"))
         fridge = _first(results, "refrigeratorAccessors")
         keep_mode = cls._FRIDGE_KEEP.get(_exact_int(fridge.get("leavingVehicleStatus")))
         keep_minutes = _exact_int(fridge.get("surplusTime")) if keep_mode == "timed" else None
@@ -370,6 +375,8 @@ class VehicleStatus:
         return cls(
             online=online if isinstance(online, bool) else {0: False, 1: True}.get(_exact_int(online)),
             updated_ms=stamp,
+            power_on={0: False, 2: True}.get(vehicle_power),
+            power_mode=vehicle_power,
             soc=round(soc * 100, 1) if soc is not None else None,
             range_km=_bounded(drv.get("remainVoyageCourse"), 0),
             charging={0: False, 2: True}.get(_exact_int(chg.get("chargingStatus"))),

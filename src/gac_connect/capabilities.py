@@ -27,6 +27,7 @@ class Capability:
 
 # Keys describe library readings/equipment, not Home Assistant entity IDs.
 READINGS = frozenset({
+    "power_on",
     "soc", "range_km", "odometer_km", "cabin_temp_c", "aux_voltage", "pm25",
     "outside_temp_c", "ac_fan_strength", "ac_auto_on", "ac_compressor_on", "anti_theft_on",
     "charge_current_a", "charge_voltage_v", "charge_power_kw", "estimated_charge_minutes",
@@ -50,10 +51,13 @@ EQUIPMENT_READINGS = {
     "lights": ("lights_on",),
     "location": ("latitude", "longitude"),
     "ventilation": (), "horn": (), "battery_precondition": (),
+    # A power reading does not establish that shutdown is remotely supported.
+    "vehicle_power_control": (),
     # Placeholder off reports do not establish that a seat can be controlled.
     **{f"seat_{i}_ventilation": () for i in range(1, 5)},
 }
 COMMAND_FEATURES = {
+    "vehicle-power-off": "vehicle_power_control",
     "aircon-on": "climate", "aircon-off": "climate",
     "fridge-on": "fridge", "fridge-off": "fridge",
     "steering-on": "steering_heat", "steering-off": "steering_heat",
