@@ -243,22 +243,26 @@ class PushClient:
                 await asyncio.gather(*pending, return_exceptions=True)
 
     def _unwrap(self, payload: bytes) -> bytes:
-        """Open an enveloped message; anything else is passed through untouched."""
+        """Require a decryptable envelope when a decryptor was configured.
+
+        An empty payload represents an untrusted result; interpret returns an
+        unknown outcome. Encryption alone does not replace TLS authentication.
+        """
         if self._decrypt is None:
             return payload
         try:
             obj = json.loads(payload)
         except (ValueError, UnicodeDecodeError):
-            return payload
+            return b""
         if isinstance(obj, dict) and obj.get("encryptData"):
             try:
                 plain = self._decrypt(obj)
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.debug("could not open push message: %s", exc)
-                return payload
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("could not open push message")
+                return b""
             if plain is not None:
                 return json.dumps(plain).encode()
-        return payload
+        return b""
 
     def stop(self) -> None:
         self._stop.set()

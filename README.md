@@ -113,6 +113,12 @@ invalid. It is always `None` for unlimited or unknown settings.
 
 ## Command results
 
+`PushClient` requires a TLS broker by default. `allow_plaintext=True` explicitly
+permits transmitting broker credentials without TLS, exposing them and command
+results to network interception. When a decryptor is supplied, unencrypted or
+undecryptable messages produce unknown outcomes. Envelope encryption alone does
+not authenticate the sender; use TLS for transport integrity.
+
 Commands are accepted asynchronously and their results are delivered by the
 service over a separate channel. `PushClient` keeps that channel open and hands
 each result (outcome, command event, session id) to your handler:
