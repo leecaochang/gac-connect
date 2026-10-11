@@ -94,6 +94,11 @@ pressure (in kPa) and temperature, and, where fitted, the fridge's mode, target
 temperature and keep-running setting (`status.fridge_mode`, `status.fridge_temp_c`,
 `status.fridge_keep_mode`, `status.fridge_keep_minutes`).
 
+For model-aware lock decoding, pass `model="Aion UT"` to
+`VehicleStatus.from_results(...)`, or use `gac_connect.models.doors_locked(status, model)`.
+The verified UT pattern (front doors locked, both rear lock readings `-1`) is
+recognized only for an explicitly selected UT; other incomplete reports stay unknown.
+
 Telemetry keeps unknown values as `None`: a group is closed/locked only when its
 readings establish that state. Malformed fields do not discard unrelated readings.
 `status.tyres` has four stable API-ID slots; `Tyre.position` is `"1"` through `"4"`,

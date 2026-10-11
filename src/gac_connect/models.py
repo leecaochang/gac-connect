@@ -72,6 +72,36 @@ def _items(res: dict, key: str) -> list:
     return items if isinstance(items, list) else []
 
 
+def _decode_door_locks(doors: Any, model: str | None = None) -> bool | None:
+    if not isinstance(doors, list) or not doors:
+        return None
+    codes = [_exact_int(door.get("lock")) if isinstance(door, dict) else None for door in doors]
+    if 1 in codes:
+        return False
+    if all(code == 0 for code in codes):
+        return True
+    # Verified UT reports keep rear locks at -1 while the front locks change.
+    # Require all four distinct door IDs and an explicitly selected UT model.
+    model_name = (model or "").strip().casefold()
+    if model_name == "aion ut" or model_name.startswith("aion ut "):
+        by_door = {
+            door["door"]: code for door, code in zip(doors, codes, strict=True)
+            if isinstance(door, dict) and type(door.get("door")) is int
+        }
+        if len(doors) == 4 and by_door == {1: 0, 2: 0, 3: -1, 4: -1}:
+            return True
+    return None
+
+
+def doors_locked(status: VehicleStatus | None, model: str | None = None) -> bool | None:
+    """Interpret lock readings with optional, explicitly selected model knowledge.
+
+    Unknown or partial reports stay unknown. The verified Aion UT rear-lock
+    sentinel is accepted only for that model and the complete four-door pattern.
+    """
+    return None if status is None else _decode_door_locks(status.raw.get("doorAccessors"), model)
+
+
 def _enabled(item: dict, flag: str) -> bool:
     value = item.get(flag, True)
     return value if isinstance(value, bool) else _exact_int(value) == 1
@@ -158,7 +188,8 @@ class VehicleStatus:
     _FRIDGE_KEEP = {1: "timed", 0: "unlimited"}
 
     @classmethod
-    def from_results(cls, results: dict, *, online: bool | None = None, updated_ms: int | None = None) -> VehicleStatus:
+    def from_results(cls, results: dict, *, online: bool | None = None,
+                     updated_ms: int | None = None, model: str | None = None) -> VehicleStatus:
         if not isinstance(results, dict):
             raise ValueError("vehicle report must be an object")
         drv = _first(results, "drivingOverviewAccessors")
@@ -188,9 +219,7 @@ class VehicleStatus:
             volt = None
         power = round(volt * cur / 1000, 2) if volt is not None and cur is not None and cur >= 0 else None
 
-        doors = _items(results, "doorAccessors")
-        codes = [_exact_int(d.get("lock")) if isinstance(d, dict) else None for d in doors]
-        locked = False if 1 in codes else (True if codes and all(code == 0 for code in codes) else None)
+        locked = _decode_door_locks(results.get("doorAccessors"), model)
 
         # Stable API IDs, not an unverified mapping to physical corners.
         tyres = [Tyre(str(index), None, None) for index in range(1, 5)]

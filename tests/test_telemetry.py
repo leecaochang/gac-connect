@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from gac_connect.errors import GacError
-from gac_connect.models import VehicleStatus
+from gac_connect.models import VehicleStatus, doors_locked
 from test_failures import Response, make_client
 
 
@@ -61,3 +61,35 @@ def test_bad_status_envelope_fails_clearly(results):
         with pytest.raises(GacError, match="report"):
             await client.get_status("VIN")
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("model,expected", [
+    (None, None), ("Aion V", None), ("Aion Utopia", None),
+    ("Aion UT", True), (" AION UT Premium ", True),
+])
+def test_ut_lock_sentinel_requires_explicit_model(model, expected):
+    raw = {"doorAccessors": [{"door": i, "lock": code} for i, code in enumerate([0, 0, -1, -1], 1)]}
+    before = deepcopy(raw)
+    status = VehicleStatus.from_results(raw, model=model)
+    assert status.locked is expected
+    assert doors_locked(status, model) is expected
+    assert raw == before
+    assert VehicleStatus.from_results(raw).locked is None
+
+
+@pytest.mark.parametrize("doors,expected", [
+    ([{"door": 1, "lock": 1}, {"door": 2, "lock": 0}], False),
+    ([{"door": 1, "lock": 0}, {"door": 2, "lock": -1}], None),
+    ([{"door": 1, "lock": 0}, {"door": 2, "lock": 0}, {"door": 3, "lock": -1}], None),
+    ([{"door": 1, "lock": 0}, {"door": 2, "lock": 0}, {"door": 3, "lock": -1},
+      {"door": 3, "lock": -1}], None),
+    ([{"door": 1, "lock": True}, {"door": 2, "lock": 0}, {"door": 3, "lock": -1},
+      {"door": 4, "lock": -1}], None),
+    ([{"door": 1, "lock": "0"}, {"door": 2, "lock": "0"}, {"door": 3, "lock": "-1"},
+      {"door": 4, "lock": "-1"}], True),
+])
+def test_ut_lock_rule_does_not_hide_unlocked_or_malformed_readings(doors, expected):
+    status = VehicleStatus.from_results({"doorAccessors": doors}, model="Aion UT")
+    assert status.locked is expected
+    assert doors_locked(status, "Aion UT") is expected
+    assert doors_locked(None, "Aion UT") is None
