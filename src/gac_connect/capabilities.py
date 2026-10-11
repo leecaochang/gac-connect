@@ -29,7 +29,7 @@ class Capability:
 READINGS = frozenset({
     "soc", "range_km", "odometer_km", "cabin_temp_c", "aux_voltage", "pm25",
     "charge_current_a", "charge_voltage_v", "charge_power_kw", "estimated_charge_minutes",
-    "charge_window_start", "charge_window_stop", "charge_weekly", "updated_ms",
+    "charge_window_start", "charge_window_stop", "charge_weekly", "charging_mode", "updated_ms",
     "plugged_in", "charging", "locked", "door_open", "window_open", "hatch_open", "online",
     "charger_locked", "sunroof_open", "steering_heat_on", "lights_on", "ac_on", "ac_target_temp_c",
     "fridge_mode", "fridge_temp_c", "fridge_keep_mode", "fridge_keep_minutes", "latitude", "longitude",
@@ -43,7 +43,8 @@ EQUIPMENT_READINGS = {
     "tailgate": ("hatch_open",),
     "doors": ("locked", "door_open"),
     "climate": ("ac_on", "ac_target_temp_c"),
-    "charge_control": ("charge_window_start", "charge_window_stop", "charge_weekly", "charging", "plugged_in"),
+    "charge_control": ("charge_window_start", "charge_window_stop", "charge_weekly", "charging_mode",
+                       "charging", "plugged_in"),
     "lights": ("lights_on",),
     "location": ("latitude", "longitude"),
     "ventilation": (), "horn": (), "battery_precondition": (),

@@ -39,6 +39,15 @@ def test_fridge_presence_requires_recognized_readings_not_a_dummy_accessor():
     assert caps.command("fridge-on").state is Support.UNKNOWN
 
 
+@pytest.mark.parametrize("mode", [0, 1])
+def test_charging_mode_alone_reveals_the_charging_equipment(mode):
+    caps = Capabilities()
+    caps.observe(VehicleStatus.from_results({"chargingAccessors": [{"chargingMode": mode}]}))
+    assert caps.feature("charge_control").state is Support.SUPPORTED
+    assert caps.command("charge-now").state is Support.UNKNOWN
+    assert caps.command("charge-pause").state is Support.UNSUPPORTED
+
+
 def test_model_defaults_can_be_corrected_by_positive_variant_evidence():
     caps = Capabilities("Aion UT")
     assert caps.feature("tyre_1_pressure").state is Support.UNSUPPORTED
