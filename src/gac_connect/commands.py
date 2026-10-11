@@ -59,7 +59,7 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     Command("fridge-off", _p("refrigerator/close"), "flat", category="climate", description="fridge off"),
     # body
     Command("lock", _p("door/lock"), "flat", stable=True, category="body", description="lock doors"),
-    Command("unlock", _p("door/unlock"), "flat", pin=True, category="body", description="unlock doors (PIN)"),
+    Command("unlock", _p("door/unlock"), "flat", category="body", description="unlock doors (no PIN required)"),
     Command("window-open", _p("window/open"), "flat", category="body", description="windows open"),
     Command("window-close", _p("window/close"), "flat", stable=True, category="body", description="windows close"),
     Command("sunroof-open", _p("sunroof/open"), "flat", category="body", description="sunroof open"),

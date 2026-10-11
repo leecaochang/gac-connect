@@ -525,6 +525,10 @@ class GacClient:
     async def lock(self, vin: str) -> Any:
         return await self.command(vin, "lock")
 
+    async def unlock(self, vin: str) -> Any:
+        """Unlock the doors without a PIN; send once and validate acceptance."""
+        return await self.command(vin, "unlock")
+
     async def charge_now(self, vin: str, *, until_soc: bool = False) -> Any:
         return await self._reservation(vin, vehicle.charge_now_operation(until_soc=until_soc))
 

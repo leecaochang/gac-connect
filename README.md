@@ -294,9 +294,9 @@ every few minutes is plenty for most uses.
 ## Notes and limits
 
 - Sign-in needs a human: a slide puzzle and an SMS code. There is no headless login.
-- Locking is available; unlock, remote power and charger-release need a
-  remote-control PIN that this client does not yet support, so those commands
-  are refused.
+- Door locking and unlocking are available. Door unlock does not require a PIN:
+  use `await client.unlock(vin)` or `await client.command(vin, "unlock")`.
+  Remote power and charger-release remain PIN-gated and are refused by this client.
 - Using the official app and this client on the same account at the same time can
   occasionally sign one of them out.
 

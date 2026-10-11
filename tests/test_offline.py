@@ -109,7 +109,7 @@ def test_command_bodies():
     assert build_body(CATALOG["status"], "V1") == {"vin": "V1"}
     ac = build_body(CATALOG["aircon-on"], "V1")
     assert ac["identifier"]["vin"] == "V1" and ac["operations"][0]["airOperationType"] == "on"
-    assert CATALOG["unlock"].pin is True and CATALOG["lock"].pin is False
+    assert CATALOG["unlock"].pin is False and CATALOG["lock"].pin is False
 
 
 def test_charge_operations():
