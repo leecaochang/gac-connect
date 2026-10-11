@@ -73,6 +73,30 @@ client = GacClient("AU", http, FileStore("~/.config/gac-connect/session.json"))
 await client.load()
 ```
 
+## Charging reports and additional telemetry
+
+Charging reports may use Unix milliseconds rather than milliseconds-of-day.
+The decoder prefers valid `startTime` / `stopTime` calendar fields and can read
+timestamp-only reports when `timezoneAccessor` supplies a time zone. A disagreement
+between those clocks is exposed as `charge_clock_consistent=False`; no clock is
+silently shifted to hide it. `charge_end_type` reports the stopping rule, while
+the target battery percentage is still unavailable.
+
+After `get_status(vin)`, `set_charge_window` uses that vehicle's reported time
+representation. Timestamp requests keep their numeric timestamps and calendar
+fields consistent in the configured scheduling zone. Legacy vehicles keep
+milliseconds-of-day. This corrects a payload-format mismatch; real acceptance
+and execution on each vehicle still need confirmation.
+
+`status.seats` contains four stable API seat IDs with ventilation on/off, wind
+strength and reported heating strength/mode. A zero reading does not prove a
+physical seat feature is fitted. The library currently has no verified seat
+on/off command or dedicated cabin-heating command; cabin A/C remains auto mode.
+Additional read-only fields include outside temperature, A/C fan strength,
+auto/compressor state, airflow/recirculation codes and anti-theft enabled state.
+Phone accessor records and alarm history do not establish callable phone actions
+or a currently active theft alarm.
+
 ## CLI
 
 The browser puzzle labels its slider and announces verification status. Focus

@@ -143,6 +143,7 @@ class GacClient:
         self._limiters = (limiter, DEFAULT_LIMITER) if limiter not in (None, DEFAULT_LIMITER) else (DEFAULT_LIMITER,)
         self._auth_dead = False      # a refresh failed for good; only a new session clears it
         self._dead_refresh: str | None = None
+        self._charge_time_formats: dict[str, str] = {}
 
     def _zone(self) -> ZoneInfo:
         """The zone charge windows are scheduled in, loaded the first time one is.
@@ -442,7 +443,10 @@ class GacClient:
         reports = data.get("results") if isinstance(data, dict) else None
         if not isinstance(reports, list) or not reports or not isinstance(reports[0], dict):
             raise ResponseError("vehicle status response has no valid report")
-        return VehicleStatus.from_results(reports[0], online=data.get("online"), updated_ms=data.get("updateTime"))
+        status = VehicleStatus.from_results(reports[0], online=data.get("online"), updated_ms=data.get("updateTime"))
+        if status.charge_time_format is not None:
+            self._charge_time_formats[vin] = status.charge_time_format
+        return status
 
     async def get_position(self, vin: str) -> dict:
         resp = await self._iov_read(commands.CATALOG["position"].path, {"vin": vin}, sensitive={"vin": vin})
@@ -538,8 +542,15 @@ class GacClient:
 
     async def set_charge_window(self, vin: str, start: str, stop: str, *,
                                 weekly: int = 0, until_soc: bool = False) -> Any:
+        """Use the time representation learned by get_status for this vehicle.
+
+        Before any usable report, retain the legacy milliseconds-of-day format.
+        A timestamp request uses the configured scheduling zone for both dates
+        and timestamps. Acceptance still needs vehicle confirmation.
+        """
         op = vehicle.window_operation(start, stop, self._zone(),
-                                      weekly=weekly, until_soc=until_soc)
+                                      weekly=weekly, until_soc=until_soc,
+                                      timestamp_times=self._charge_time_formats.get(vin) == "timestamp")
         return await self._reservation(vin, op)
 
     async def _reservation(self, vin: str, operation: dict) -> Any:
@@ -566,7 +577,7 @@ def _command_result(resp: Any) -> Any:
             raise TokenInvalidError("token invalid; refresh and reissue the command")
         if resp.get("success") is True or code in (CODE_COMMAND_ACCEPTED, str(CODE_COMMAND_ACCEPTED), "0000"):
             return resp
-        raise CommandError(f"command rejected: {_msg(resp)}")
+        raise CommandError(f"command rejected: {_msg(resp)}", code=code)
     raise CommandError("command response must be an object with an acceptance result")
 
 

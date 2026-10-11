@@ -28,12 +28,14 @@ class Capability:
 # Keys describe library readings/equipment, not Home Assistant entity IDs.
 READINGS = frozenset({
     "soc", "range_km", "odometer_km", "cabin_temp_c", "aux_voltage", "pm25",
+    "outside_temp_c", "ac_fan_strength", "ac_auto_on", "ac_compressor_on", "anti_theft_on",
     "charge_current_a", "charge_voltage_v", "charge_power_kw", "estimated_charge_minutes",
     "charge_window_start", "charge_window_stop", "charge_weekly", "charging_mode", "updated_ms",
     "plugged_in", "charging", "locked", "door_open", "window_open", "hatch_open", "online",
     "charger_locked", "sunroof_open", "steering_heat_on", "lights_on", "ac_on", "ac_target_temp_c",
     "fridge_mode", "fridge_temp_c", "fridge_keep_mode", "fridge_keep_minutes", "latitude", "longitude",
     *(f"tyre_{i}_{kind}" for i in range(1, 5) for kind in ("pressure", "temperature")),
+    *(f"seat_{i}_ventilation_on" for i in range(1, 5)),
 })
 EQUIPMENT_READINGS = {
     "fridge": ("fridge_mode",),
@@ -87,7 +89,7 @@ class Capabilities:
         """Remember usable decoded readings, including explicit zero/off values."""
         before = self.export_state()
         for field in READINGS:
-            if not field.startswith("tyre_") and _known(getattr(status, field, None)):
+            if not field.startswith(("tyre_", "seat_")) and _known(getattr(status, field, None)):
                 self._readings.add(field)
         # Match API IDs, never array order. The decoder already rejects flags,
         # invalid/duplicate IDs and paired unreported tyre placeholders.
@@ -98,6 +100,9 @@ class Capabilities:
                 self._readings.add(f"tyre_{tyre.position}_pressure")
             if _known(tyre.temperature_c):
                 self._readings.add(f"tyre_{tyre.position}_temperature")
+        for seat in getattr(status, "seats", ()):
+            if seat.position in ("1", "2", "3", "4") and _known(seat.ventilation_on):
+                self._readings.add(f"seat_{seat.position}_ventilation_on")
         return before != self.export_state()
 
     def observe_equipment(self, flags: dict[str, bool]) -> bool:

@@ -114,6 +114,17 @@ def test_explicit_command_acceptance_is_preserved(body):
     assert http.post.call_count == 1
 
 
+@pytest.mark.parametrize("code,expected", [(13101, "13101"), ("SDK.GATE.0017", "SDK.GATE.0017"),
+                                         ("PRIVATE-TOKEN", None), (True, None), ({"token": "private"}, None)])
+def test_command_rejection_exposes_only_a_bounded_service_code(code, expected):
+    from gac_connect.client import _command_result
+    from gac_connect.errors import CommandError
+
+    with pytest.raises(CommandError) as caught:
+        _command_result({"code": code, "msg": "private response message"})
+    assert caught.value.code == expected
+
+
 @pytest.mark.parametrize("method", ["lock", "unlock", "charge_now"])
 def test_rejected_command_is_not_replayed_but_next_explicit_attempt_refreshes(method):
     from gac_connect.errors import TokenInvalidError

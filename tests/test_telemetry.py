@@ -115,3 +115,66 @@ def test_fridge_requires_a_nonempty_first_report(items, expected):
     status = VehicleStatus.from_results(raw)
     assert status.fridge_fitted is expected
     assert status.raw is raw and raw == before
+
+
+def test_ut_calendar_reservation_survives_conflicting_timestamp_clock():
+    raw = {"timezoneAccessor": {"timezone": "Asia/Bangkok"}, "chargingAccessors": [{
+        "chargingMode": 1, "weeklyReservation": 0, "chargingEndType": 0,
+        "dailyReservationStartTime": 1791727200000, "dailyReservationStopTime": 1791756000000,
+        "startTime": {"year": 2026, "month": 10, "day": 11, "hour": 22, "minute": 0},
+        "stopTime": {"year": 2026, "month": 10, "day": 12, "hour": 6, "minute": 0},
+    }]}
+    before = deepcopy(raw)
+    status = VehicleStatus.from_results(raw)
+    assert (status.charge_window_start, status.charge_window_stop) == ("22:00", "06:00")
+    assert status.charge_time_format == "timestamp"
+    assert status.charge_clock_consistent is False
+    assert status.charge_end_type == 0
+    assert raw == before and status.raw is raw
+
+
+@pytest.mark.parametrize("zone,start,stop", [
+    ("Asia/Bangkok", "21:00", "05:00"), (None, None, None), ("Invalid/Zone", None, None),
+])
+def test_timestamp_only_reservation_requires_reported_zone(zone, start, stop):
+    status = VehicleStatus.from_results({"timezoneAccessor": {"timezone": zone}, "chargingAccessors": [{
+        "dailyReservationStartTime": 1791727200000, "dailyReservationStopTime": 1791756000000,
+    }]})
+    assert (status.charge_window_start, status.charge_window_stop) == (start, stop)
+    assert status.charge_clock_consistent is None
+
+
+def test_malformed_calendar_falls_back_to_legacy_clock():
+    status = VehicleStatus.from_results({"chargingAccessors": [{
+        "startTime": {"year": 2026, "month": 2, "day": 31, "hour": 22, "minute": 0},
+        "stopTime": {"year": True, "month": 10, "day": 12, "hour": 6, "minute": 0},
+        "dailyReservationStartTime": 82800000, "dailyReservationStopTime": 18000000,
+        "chargingEndType": 1,
+    }]})
+    assert (status.charge_window_start, status.charge_window_stop) == ("23:00", "05:00")
+    assert status.charge_time_format == "time_of_day"
+    assert status.charge_end_type == 1
+
+
+def test_seat_ids_flags_and_duplicates_are_not_inferred_from_array_order():
+    status = VehicleStatus.from_results({"seatTemperatureAccessors": [
+        {"seat": 2, "enableWind": 1, "windStrength": 3, "temperatureStrength": 0, "temperatureMode": 0},
+        {"seat": 1, "enableWind": 0, "windStrength": 0},
+        {"seat": 3, "enableWind": -1, "windStrength": -1},
+        {"seat": 4, "enableWind": 1}, {"seat": 4, "enableWind": 0},
+        {"seat": True, "enableWind": 1}, None,
+    ]})
+    assert [seat.position for seat in status.seats] == ["1", "2", "3", "4"]
+    assert [seat.ventilation_on for seat in status.seats] == [False, True, None, None]
+    assert [seat.ventilation_strength for seat in status.seats] == [0, 3, None, None]
+    assert status.seats[1].heating_strength == 0
+
+
+@pytest.mark.parametrize("value,expected", [(0, False), (1, True), (-1, None), (True, None), (1.5, None)])
+def test_optional_ac_and_anti_theft_flags_preserve_unknown(value, expected):
+    status = VehicleStatus.from_results({
+        "airConditionAccessors": [{"enableAutoMode": value, "enableAirCompressor": value}],
+        "antiTheftAccessors": [{"enable": value}],
+    })
+    assert status.ac_auto_on is expected and status.ac_compressor_on is expected
+    assert status.anti_theft_on is expected

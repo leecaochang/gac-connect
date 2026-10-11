@@ -100,3 +100,14 @@ def test_invalid_cache_never_creates_capabilities(state):
     caps.restore(state)
     assert caps.feature("soc").state is Support.UNKNOWN
     assert caps.command("lock").state is Support.UNKNOWN
+
+
+def test_seat_and_anti_theft_status_do_not_invent_remote_controls():
+    caps = Capabilities("Aion UT")
+    caps.observe(VehicleStatus.from_results({"seatTemperatureAccessors": [
+        {"seat": 1, "enableWind": 0}, {"seat": 2, "enableWind": -1},
+    ], "antiTheftAccessors": [{"enable": 1}]}))
+    assert caps.feature("seat_1_ventilation_on").state is Support.SUPPORTED
+    assert caps.feature("seat_2_ventilation_on").state is Support.UNKNOWN
+    assert caps.feature("anti_theft_on").state is Support.SUPPORTED
+    assert caps.command("seat-ventilation-on").state is Support.UNKNOWN

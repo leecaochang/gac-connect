@@ -10,7 +10,8 @@ with the gateway's quirks resolved:
 * lock uses the gateway's inverted polarity (0 = locked), decoded to a bool;
 * openMode 0 = closed, >0 = open, negative = unknown;
 * the A/C is "on" when the compressor flag is set or the fan is running;
-* reservation times are milliseconds-of-day on the service's clock, exposed as "HH:MM".
+* reservations can use calendar fields, Unix milliseconds, or milliseconds-of-day;
+  explicit calendar fields take precedence over timestamp clock conversions.
 
 The raw ``results`` dict is retained on ``.raw`` so anything not modelled here is
 still reachable.
@@ -19,8 +20,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import IntEnum
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class ChargingStatus(IntEnum):
@@ -121,11 +124,53 @@ def _hhmm(ms: Any) -> str | None:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _calendar_clock(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    parts = {key: _exact_int(value.get(key)) for key in ("year", "month", "day", "hour", "minute")}
+    if any(part is None for part in parts.values()):
+        return None
+    try:
+        return datetime(**parts).strftime("%H:%M")
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _timestamp_clock(value: Any, zone: Any) -> str | None:
+    stamp = _exact_int(value)
+    if stamp is None or not 86_400_000 <= stamp < 253402300800000 or not isinstance(zone, str):
+        return None
+    try:
+        return datetime.fromtimestamp(stamp / 1000, ZoneInfo(zone)).strftime("%H:%M")
+    except (ValueError, OverflowError, OSError, ZoneInfoNotFoundError):
+        return None
+
+
+def _reservation_format(chg: dict) -> str | None:
+    values = [_exact_int(chg.get(key)) for key in ("dailyReservationStartTime", "dailyReservationStopTime")]
+    if all(value is not None and 0 <= value < 86_400_000 for value in values):
+        return "time_of_day"
+    if all(value is not None and 86_400_000 <= value < 253402300800000 for value in values):
+        return "timestamp"
+    return None
+
+
 @dataclass
 class Tyre:
     position: str
     pressure_kpa: float | None
     temperature_c: float | None
+
+
+@dataclass
+class Seat:
+    """Stable API seat ID; physical seat names and strength scales are unverified."""
+
+    position: str
+    ventilation_on: bool | None = None
+    ventilation_strength: float | None = None
+    heating_strength: float | None = None
+    temperature_mode: int | None = None
 
 
 @dataclass
@@ -146,6 +191,7 @@ class VehicleStatus:
     # odometer / environment
     odometer_km: float | None = None
     cabin_temp_c: float | None = None
+    outside_temp_c: float | None = None
     pm25: float | None = None
     aux_voltage: float | None = None         # 12 V battery
     # location
@@ -161,6 +207,13 @@ class VehicleStatus:
     # climate
     ac_on: bool | None = None
     ac_target_temp_c: float | None = None
+    ac_fan_strength: float | None = None
+    ac_auto_on: bool | None = None
+    ac_compressor_on: bool | None = None
+    ac_blowing_mode: int | None = None
+    ac_cycling_mode: int | None = None
+    seats: list[Seat] = field(default_factory=list)
+    anti_theft_on: bool | None = None
     steering_heat_on: bool | None = None
     lights_on: bool | None = None
     # fridge / warmer box: None when the car does not report one
@@ -177,6 +230,9 @@ class VehicleStatus:
     charge_window_start: str | None = None
     charge_window_stop: str | None = None
     charge_weekly: int | None = None
+    charge_end_type: int | None = None
+    charge_time_format: str | None = None
+    charge_clock_consistent: bool | None = None
     raw: dict = field(default_factory=dict)
 
     # gateway "unknown" placeholder for charge current
@@ -201,6 +257,7 @@ class VehicleStatus:
         air = _first(results, "airConditionAccessors")
         steer = _first(results, "steeringAccessors")
         light = _first(results, "lightAccessors")
+        theft = _first(results, "antiTheftAccessors")
         fridge = _first(results, "refrigeratorAccessors")
         keep_mode = cls._FRIDGE_KEEP.get(_exact_int(fridge.get("leavingVehicleStatus")))
         keep_minutes = _exact_int(fridge.get("surplusTime")) if keep_mode == "timed" else None
@@ -276,6 +333,37 @@ class VehicleStatus:
         if stamp is not None and not 0 < stamp < 253402300800000:
             stamp = None
 
+        seats = [Seat(str(index)) for index in range(1, 5)]
+        seen_seats: set[int] = set()
+        for item in _items(results, "seatTemperatureAccessors"):
+            if not isinstance(item, dict):
+                continue
+            index = _exact_int(item.get("seat"))
+            if index not in (1, 2, 3, 4):
+                continue
+            if index in seen_seats:
+                seats[index - 1] = Seat(str(index))
+                continue
+            seen_seats.add(index)
+            seats[index - 1] = Seat(
+                str(index), {0: False, 1: True}.get(_exact_int(item.get("enableWind"))),
+                _bounded(item.get("windStrength"), 0), _bounded(item.get("temperatureStrength"), 0),
+                _exact_int(item.get("temperatureMode")),
+            )
+
+        timezone = results.get("timezoneAccessor")
+        zone = (timezone if isinstance(timezone, dict) else _first(results, "timezoneAccessor")).get("timezone")
+        clocks = []
+        comparisons = []
+        for struct_key, time_key in (("startTime", "dailyReservationStartTime"),
+                                     ("stopTime", "dailyReservationStopTime")):
+            calendar = _calendar_clock(chg.get(struct_key))
+            timestamp = _timestamp_clock(chg.get(time_key), zone)
+            clocks.append(calendar or _hhmm(chg.get(time_key)) or timestamp)
+            if calendar is not None and timestamp is not None:
+                comparisons.append(calendar == timestamp)
+        end_type = _exact_int(chg.get("chargingEndType"))
+
         return cls(
             online=online if isinstance(online, bool) else {0: False, 1: True}.get(_exact_int(online)),
             updated_ms=stamp,
@@ -291,6 +379,7 @@ class VehicleStatus:
             charger_locked={0: True, 1: False}.get(_exact_int(cgr.get("lock"))),
             odometer_km=_bounded(drv.get("totalVoyageCourse"), 0),
             cabin_temp_c=_num(env.get("temperatureInsideCar")),
+            outside_temp_c=_num(env.get("temperatureOutsideCar")),
             pm25=_bounded(env.get("pm25"), 0),
             aux_voltage=_bounded(bat.get("voltage"), 0),
             latitude=_bounded(pos.get("latitude"), -90, 90),
@@ -303,6 +392,13 @@ class VehicleStatus:
             tyres=tyres,
             ac_on=ac_on,
             ac_target_temp_c=_num(air.get("temperature")),
+            ac_fan_strength=_bounded(air.get("windStrength"), 0),
+            ac_auto_on={0: False, 1: True}.get(_exact_int(air.get("enableAutoMode"))),
+            ac_compressor_on={0: False, 1: True}.get(_exact_int(air.get("enableAirCompressor"))),
+            ac_blowing_mode=_exact_int(air.get("blowingMode")),
+            ac_cycling_mode=_exact_int(air.get("cyclingMode")),
+            seats=seats,
+            anti_theft_on={0: False, 1: True}.get(_exact_int(theft.get("enable"))),
             steering_heat_on=(steering > 0) if steering is not None else None,
             lights_on=(lights > 0) if lights is not None else None,
             fridge_fitted=bool(fridge),
@@ -310,9 +406,12 @@ class VehicleStatus:
             fridge_temp_c=_finite(fridge.get("refrigeratorTemperature")),
             fridge_keep_mode=keep_mode,
             fridge_keep_minutes=keep_minutes,
-            charge_window_start=_hhmm(chg.get("dailyReservationStartTime")),
-            charge_window_stop=_hhmm(chg.get("dailyReservationStopTime")),
+            charge_window_start=clocks[0],
+            charge_window_stop=clocks[1],
             charge_weekly=int(weekly) if weekly is not None else None,
+            charge_end_type=end_type if end_type in (0, 1) else None,
+            charge_time_format=_reservation_format(chg),
+            charge_clock_consistent=(False if False in comparisons else True if len(comparisons) == 2 else None),
             raw=results,
         )
 

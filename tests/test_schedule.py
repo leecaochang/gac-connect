@@ -43,3 +43,35 @@ def test_invalid_window_never_sends(kw):
     with pytest.raises(ValueError):
         asyncio.run(client.set_charge_window("VIN", **{"start": "23:00", "stop": "05:00", **kw}))
     client._reservation.assert_not_called()
+
+
+def test_timestamp_reservation_uses_the_same_dates_and_zone_as_calendar_fields():
+    now = datetime(2026, 10, 11, 13, tzinfo=ZONE)
+    op = window_operation("22:00", "06:00", ZONE, now=now, timestamp_times=True)
+    assert datetime.fromtimestamp(op["dailyReservationStartTime"] / 1000, ZONE) == stamp(op["startTime"])
+    assert datetime.fromtimestamp(op["dailyReservationStopTime"] / 1000, ZONE) == stamp(op["stopTime"])
+    assert op["dailyReservationStopTime"] - op["dailyReservationStartTime"] == 8 * 3600000
+
+
+def test_client_learns_reservation_format_per_vehicle_without_sending_test_commands():
+    import asyncio
+    from test_failures import Response, make_client
+
+    raw = {"chargingAccessors": [{
+        "dailyReservationStartTime": 1791727200000, "dailyReservationStopTime": 1791756000000,
+    }]}
+    client, _, _ = make_client(Response(body={"data": {"results": [raw]}}), valid=True)
+    client._reservation = AsyncMock()
+
+    async def run():
+        await client.load()
+        await client.get_status("timestamp-car")
+        client._reservation.assert_not_awaited()
+        await client.set_charge_window("timestamp-car", "22:00", "06:00")
+        op = client._reservation.await_args.args[1]
+        assert op["dailyReservationStartTime"] > 86_400_000
+        assert op["dailyReservationStopTime"] > op["dailyReservationStartTime"]
+        await client.set_charge_window("legacy-car", "22:00", "06:00")
+        assert client._reservation.await_args.args[1]["dailyReservationStartTime"] == 22 * 3600000
+
+    asyncio.run(run())

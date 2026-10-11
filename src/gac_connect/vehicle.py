@@ -86,7 +86,8 @@ def validate_weekly(weekly: int | float) -> int:
 
 
 def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
-                     weekly: int = 0, until_soc: bool = False, now: datetime | None = None) -> dict:
+                     weekly: int = 0, until_soc: bool = False, now: datetime | None = None,
+                     timestamp_times: bool = False) -> dict:
     """Schedule the next selected start day, with its stop strictly afterwards."""
     validate_clock(start_hhmm)
     validate_clock(stop_hhmm)
@@ -107,7 +108,8 @@ def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
     if stop <= start:
         stop += timedelta(days=1)
     return _operation(
-        _ms_of_day(sh, sm), _ms_of_day(eh, em), weekly, MODE_SCHEDULED,
+        int(start.timestamp() * 1000) if timestamp_times else _ms_of_day(sh, sm),
+        int(stop.timestamp() * 1000) if timestamp_times else _ms_of_day(eh, em), weekly, MODE_SCHEDULED,
         END_AT_SOC if until_soc else END_AT_TIME,
         start_struct=_struct(start), stop_struct=_struct(stop),
     )

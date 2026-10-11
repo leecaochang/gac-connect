@@ -1,6 +1,8 @@
 """Exception hierarchy, mapped from gateway result codes."""
 from __future__ import annotations
 
+import re
+
 
 class GacError(Exception):
     """Base for every error raised by this library."""
@@ -48,6 +50,12 @@ class RepeatRequestError(GacError):
 
 class CommandError(GacError):
     """A vehicle command was rejected or malformed."""
+
+    def __init__(self, message: str = "", *, code: object = None) -> None:
+        super().__init__(message)
+        # Diagnostics may retain this bounded service code, never the API message.
+        value = str(code) if type(code) in (int, str) else ""
+        self.code = value if re.fullmatch(r"(?:[0-9]{1,8}|SDK\.[A-Z]{1,12}\.[0-9]{1,8})", value) else None
 
 
 class PinRequiredError(CommandError):
