@@ -450,12 +450,21 @@ class GacClient:
             raise CommandError(f"unknown command {name!r}")
         if cmd.pin:
             raise PinRequiredError(f"{name} needs the remote-control PIN, not yet supported")
-        await self._ensure_token()
         body = commands.build_body(cmd, vin, overrides)
-        resp = await self._iov_call(cmd.path, body, sensitive={"vin": vin}, kind="command")
-        # Commands are NOT auto-retried on an invalid token (could double-actuate);
-        # surface it so the caller decides.
-        return _command_result(resp)
+        return await self._dispatch_command(cmd.path, body, vin)
+
+    async def _dispatch_command(self, path: str, body: dict, vin: str) -> Any:
+        await self._ensure_token()
+        used = self._session.token
+        resp = await self._iov_call(path, body, sensitive={"vin": vin}, kind="command")
+        try:
+            return _command_result(resp)
+        except TokenInvalidError:
+            # Never replay an action. Prepare only the next explicit attempt, and
+            # do not invalidate a token another caller has already rotated.
+            if self._session.token == used:
+                self._session.expire_time = 0
+            raise
 
     async def climate_on(self, vin: str, *, temperature: float = 24.0, minutes: int = 30) -> Any:
         """Run the cabin A/C in auto mode at ``temperature`` °C for ``minutes``.
@@ -502,10 +511,7 @@ class GacClient:
         return await self._reservation(vin, op)
 
     async def _reservation(self, vin: str, operation: dict) -> Any:
-        await self._ensure_token()
-        resp = await self._iov_call(vehicle._RESERVATION, vehicle.reservation_body(vin, operation),
-                                    sensitive={"vin": vin}, kind="command")
-        return _command_result(resp)
+        return await self._dispatch_command(vehicle._RESERVATION, vehicle.reservation_body(vin, operation), vin)
 
 
 def command_session_id(resp: Any) -> str | None:

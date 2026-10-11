@@ -112,3 +112,42 @@ def test_explicit_command_acceptance_is_preserved(body):
         assert await client.lock("VIN") == body
     asyncio.run(run())
     assert http.post.call_count == 1
+
+
+@pytest.mark.parametrize("method", ["lock", "charge_now"])
+def test_rejected_command_is_not_replayed_but_next_explicit_attempt_refreshes(method):
+    from gac_connect.errors import TokenInvalidError
+    client, http, _ = make_client(Response(), valid=True)
+    http.post.side_effect = [
+        Response(body={"code": "SDK.GATE.0007"}),
+        Response(body={"data": {"token": "new", "refreshToken": "next", "expireTime": 10**14, "rexpireTime": 10**14}}),
+        Response(body={"code": 13001}),
+    ]
+    async def run():
+        await client.load()
+        with pytest.raises(TokenInvalidError):
+            await getattr(client, method)("VIN")
+        assert http.post.call_count == 1
+        await getattr(client, method)("VIN")
+    asyncio.run(run())
+    urls = [c.args[0] for c in http.post.call_args_list]
+    assert len(urls) == 3
+    assert urls[0] == urls[2]
+    assert urls[1].endswith("/refresh/token")
+
+
+def test_rejection_does_not_invalidate_a_concurrently_rotated_token():
+    from gac_connect.errors import TokenInvalidError
+    client, http, _ = make_client(Response(), valid=True)
+    class RotatedResponse(Response):
+        async def read(self):
+            client._session = Session(token="new", refresh_token="next", expire_time=10**14, rexpire_time=10**14)
+            return await super().read()
+    http.post.return_value = RotatedResponse(body={"code": "SDK.GATE.0007"})
+    async def run():
+        await client.load()
+        with pytest.raises(TokenInvalidError):
+            await client.lock("VIN")
+        assert client.session.access_valid
+        assert client.session.token == "new"
+    asyncio.run(run())
