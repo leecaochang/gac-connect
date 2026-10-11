@@ -19,12 +19,27 @@ from .errors import (
     ResponseError,
 )
 from .limits import DEFAULT_LIMITER, Limiter
+from .models import VehicleStatus, doors_locked
+from .phone import local_mobile
 from .push import BrokerInfo, PushClient, PushResult, interpret
+from .vehicle import PAUSE_UNSUPPORTED, validate_clock, validate_weekly, window_operation
+
+# Public decoding entry point for consumers; use the same implementation as
+# GacClient.get_status, without a second normalization pass or client subclass.
+decode_status = VehicleStatus.from_results
 
 __version__ = "0.4.0b5"
 
 __all__ = [
     "GacClient",
+    "VehicleStatus",
+    "decode_status",
+    "doors_locked",
+    "local_mobile",
+    "PAUSE_UNSUPPORTED",
+    "validate_clock",
+    "validate_weekly",
+    "window_operation",
     "AuthError",
     "DEFAULT_LIMITER",
     "Limiter",

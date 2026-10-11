@@ -70,20 +70,31 @@ def pause_operation(tz: ZoneInfo) -> dict:
     raise CommandError(PAUSE_UNSUPPORTED)
 
 
-def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
-                     weekly: int = 0, until_soc: bool = False, now: datetime | None = None) -> dict:
-    """Schedule the next selected start day, with its stop strictly afterwards."""
-    for value in (start_hhmm, stop_hhmm):
-        if not isinstance(value, str) or re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) is None:
-            raise ValueError("charge times must use HH:MM, from 00:00 to 23:59")
-    if start_hhmm == stop_hhmm:
-        raise ValueError("start and stop must differ; use Charge now for unrestricted charging")
+def validate_clock(value: str) -> str:
+    """Validate a car-local HH:MM value before constructing a charge command."""
+    if not isinstance(value, str) or re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) is None:
+        raise ValueError("charge times must use HH:MM, from 00:00 to 23:59")
+    return value
+
+
+def validate_weekly(weekly: int | float) -> int:
+    """Validate a Mon=1 through Sun=64 day mask; zero means every day."""
     if (isinstance(weekly, bool) or not isinstance(weekly, (int, float))
             or not 0 <= weekly <= 127 or weekly != int(weekly)):
         raise ValueError("weekly must be an integer from 0 to 127")
+    return int(weekly)
+
+
+def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
+                     weekly: int = 0, until_soc: bool = False, now: datetime | None = None) -> dict:
+    """Schedule the next selected start day, with its stop strictly afterwards."""
+    validate_clock(start_hhmm)
+    validate_clock(stop_hhmm)
+    weekly = validate_weekly(weekly)
+    if start_hhmm == stop_hhmm:
+        raise ValueError("start and stop must differ; use Charge now for unrestricted charging")
     if not isinstance(until_soc, bool):
         raise ValueError("until_soc must be a boolean")
-    weekly = int(weekly)
     sh, sm = map(int, start_hhmm.split(":"))
     eh, em = map(int, stop_hhmm.split(":"))
     now = datetime.now(tz) if now is None else now.astimezone(tz)

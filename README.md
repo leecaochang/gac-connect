@@ -309,6 +309,19 @@ every few minutes is plenty for most uses.
 
 A Home Assistant integration built on this library is available separately.
 
+Consumers can import `GacClient`, `PushClient`, `decode_status`, `doors_locked`,
+`local_mobile`, `validate_clock`, `validate_weekly`, `window_operation`, and
+`PAUSE_UNSUPPORTED` directly from `gac_connect`. `decode_status` is an alias for
+`VehicleStatus.from_results`, the decoder used by the client. The library owns
+HTTP/authentication behavior, command acceptance, telemetry, schedule construction,
+phone normalization, and push decoding; consumers own their UI and storage lifecycle.
+
+These public behavior exports accompany the consolidated client fixes. The HA
+integration uses their availability to select the native library implementation;
+its pinned b1 release still needs a separate compatibility adapter. Do not remove
+that adapter or change the dependency pin until a new library artifact has been
+published and tested without the adapter.
+
 ## Acknowledgements
 
 This project stands on the shoulders of the community projects that brought other
