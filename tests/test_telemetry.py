@@ -93,3 +93,25 @@ def test_ut_lock_rule_does_not_hide_unlocked_or_malformed_readings(doors, expect
     assert status.locked is expected
     assert doors_locked(status, "Aion UT") is expected
     assert doors_locked(None, "Aion UT") is None
+
+
+@pytest.mark.parametrize("value,expected", [
+    (-1, None), (-2, None), (128, None), (1638, None), ("-1", None), ("128", None),
+    (True, None), (1.5, None), (float("nan"), None), (float("inf"), None), (10**400, None),
+    (None, None), (0, 0), (127, 127), ("127", 127), ("64", 64),
+])
+def test_reported_weekly_mask_has_only_seven_day_bits(value, expected):
+    assert VehicleStatus.from_results({"chargingAccessors": [{"weeklyReservation": value}]}).charge_weekly == expected
+
+
+@pytest.mark.parametrize("items,expected", [
+    (None, False), ([], False), ([None], False), ([{}], False), ("bad", False),
+    ([None, {"workingMode": 1}], False),
+    ([{"workingMode": 3}], True), ([{"workingMode": "unknown"}], True),
+])
+def test_fridge_requires_a_nonempty_first_report(items, expected):
+    raw = {"refrigeratorAccessors": items}
+    before = deepcopy(raw)
+    status = VehicleStatus.from_results(raw)
+    assert status.fridge_fitted is expected
+    assert status.raw is raw and raw == before
