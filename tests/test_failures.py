@@ -89,3 +89,26 @@ def test_cli_pause_fails_before_creating_client(monkeypatch):
     assert result.exit_code != 0
     assert "Continuous charging pause" in result.output
     factory.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [None, [], True, 0, "maintenance", {"success": "false", "code": 503},
+                                 {"success": 1}, {"success": False}, {}])
+def test_malformed_command_response_is_not_acceptance(body):
+    from gac_connect.errors import CommandError
+    client, http, _ = make_client(Response(body=body), valid=True)
+    async def run():
+        await client.load()
+        with pytest.raises(CommandError):
+            await client.lock("VIN")
+    asyncio.run(run())
+    assert http.post.call_count == 1
+
+
+@pytest.mark.parametrize("body", [{"success": True}, {"code": 13001}, {"code": "13001"}, {"code": "0000"}])
+def test_explicit_command_acceptance_is_preserved(body):
+    client, http, _ = make_client(Response(body=body), valid=True)
+    async def run():
+        await client.load()
+        assert await client.lock("VIN") == body
+    asyncio.run(run())
+    assert http.post.call_count == 1

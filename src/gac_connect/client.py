@@ -227,7 +227,7 @@ class GacClient:
 
     @staticmethod
     def _ok(resp: Any) -> bool:
-        return isinstance(resp, dict) and bool(resp.get("success"))
+        return isinstance(resp, dict) and resp.get("success") is True
 
     # ---- sign-in ---------------------------------------------------------
     async def start_captcha(self) -> Captcha:
@@ -526,10 +526,10 @@ def _command_result(resp: Any) -> Any:
         code = resp.get("code")
         if code == ERR_TOKEN_INVALID:
             raise TokenInvalidError("token invalid; refresh and reissue the command")
-        if resp.get("success") or code in (CODE_COMMAND_ACCEPTED, str(CODE_COMMAND_ACCEPTED), "0000"):
+        if resp.get("success") is True or code in (CODE_COMMAND_ACCEPTED, str(CODE_COMMAND_ACCEPTED), "0000"):
             return resp
         raise CommandError(f"command rejected: {_msg(resp)}")
-    return resp
+    raise CommandError("command response must be an object with an acceptance result")
 
 
 def _msg(resp: Any) -> str:
