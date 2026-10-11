@@ -221,6 +221,10 @@ Continuous pause is unavailable: `charge_pause`, `pause_operation` and CLI
 `gac charge <VIN> pause` raise an error without sending a request. The previous
 operation allowed charging every day from 03:00 to 03:30 and was not a true stop.
 
+Windows require distinct `HH:MM` times. Their stop follows the next selected start,
+including overnight. `weekly` is a whole-number mask from 0 to 127 (Monday=1,
+Sunday=64, 0=every day); the start date honors that mask in the configured zone.
+
 ## Request limits
 
 Every request the library sends passes one limiter shared by all clients in the

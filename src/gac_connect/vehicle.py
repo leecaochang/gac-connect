@@ -12,6 +12,7 @@ Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64; 0 = 
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -37,12 +38,6 @@ def _ms_of_day(hh: int, mm: int) -> int:
 def _struct(dt: datetime) -> dict:
     return {"year": dt.year, "month": dt.month, "day": dt.day,
             "hour": dt.hour, "minute": dt.minute, "second": 0, "millisecond": 0}
-
-
-def _next_local(hh: int, mm: int, tz: ZoneInfo) -> datetime:
-    now = datetime.now(tz)
-    cand = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    return cand if cand > now else cand + timedelta(days=1)
 
 
 def _operation(start_ms: int, stop_ms: int, weekly: int, mode: int, end_type: int,
@@ -76,12 +71,32 @@ def pause_operation(tz: ZoneInfo) -> dict:
 
 
 def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
-                     weekly: int = 0, until_soc: bool = False) -> dict:
-    sh, sm = (int(x) for x in start_hhmm.split(":"))
-    eh, em = (int(x) for x in stop_hhmm.split(":"))
+                     weekly: int = 0, until_soc: bool = False, now: datetime | None = None) -> dict:
+    """Schedule the next selected start day, with its stop strictly afterwards."""
+    for value in (start_hhmm, stop_hhmm):
+        if not isinstance(value, str) or re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) is None:
+            raise ValueError("charge times must use HH:MM, from 00:00 to 23:59")
+    if start_hhmm == stop_hhmm:
+        raise ValueError("start and stop must differ; use Charge now for unrestricted charging")
+    if (isinstance(weekly, bool) or not isinstance(weekly, (int, float))
+            or not 0 <= weekly <= 127 or weekly != int(weekly)):
+        raise ValueError("weekly must be an integer from 0 to 127")
+    if not isinstance(until_soc, bool):
+        raise ValueError("until_soc must be a boolean")
+    weekly = int(weekly)
+    sh, sm = map(int, start_hhmm.split(":"))
+    eh, em = map(int, stop_hhmm.split(":"))
+    now = datetime.now(tz) if now is None else now.astimezone(tz)
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    if start <= now:
+        start += timedelta(days=1)
+    while weekly and not weekly & (1 << start.weekday()):
+        start += timedelta(days=1)
+    stop = start.replace(hour=eh, minute=em)
+    if stop <= start:
+        stop += timedelta(days=1)
     return _operation(
         _ms_of_day(sh, sm), _ms_of_day(eh, em), weekly, MODE_SCHEDULED,
         END_AT_SOC if until_soc else END_AT_TIME,
-        start_struct=_struct(_next_local(sh, sm, tz)),
-        stop_struct=_struct(_next_local(eh, em, tz)),
+        start_struct=_struct(start), stop_struct=_struct(stop),
     )
