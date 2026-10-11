@@ -378,6 +378,17 @@ Thanks to their authors for showing what a good community integration looks like
   `fridge_off()`, with per-mode temperature ranges checked before sending, and
   the fridge's mode and target temperature in the vehicle status.
 
+## Development
+
+Use an isolated environment with `python -m pip install '.[cli,dev]'`, then run
+`python -m pytest` and `ruff check .`. Tests use synthetic responses and do not
+send commands to a vehicle. The validation workflow covers Python 3.11, 3.13 and
+3.14, includes CLI tests, and builds and installs a wheel in a fresh environment.
+Its artifact smoke test runs outside the checkout and checks public imports,
+both bundled key profiles, the typing marker, and encrypted response decoding.
+Make the workflow a required repository check before relying on it as a merge
+gate. Live regional gateway compatibility remains a separate validation step.
+
 ## License
 
 MIT.
