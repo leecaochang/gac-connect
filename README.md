@@ -309,10 +309,13 @@ Neither command sends the old `airOperationType` marker or -1 airflow fields.
 `climate_manual_on(vin, temperature=24, minutes=30, fan_speed=None)` uses the
 same timed open envelope, with `enableAutoMode=0` and `enableAirCompressor=1`.
 With no fan speed it omits `windStrength`, preserving the existing manual blower
-and outlets on the tested Aion UT. An integer `fan_speed` from 1 to 10 selects
-that speed and starts or renews the timed run at the supplied temperature.
-Airflow fields remain absent. Manual startup and changing speed from 3 to 6
-were physically confirmed on that vehicle; other models remain best-effort.
+and outlets on the tested Aion UT. An integer `fan_speed` from 1 to 10 is accepted
+by the raw request serializer and starts or renews the timed run at the supplied
+temperature; the vehicle cloud may accept a smaller range. The UT capability
+read advertises a maximum of 7. The user confirmed remote changes from 3 to 6
+and speed 7, while 8–10 were rejected with an unsupported-strength response
+(gateway code 13002). The HA integration therefore offers 1–7, preserving
+console reports up to 10. Airflow fields remain absent; other models remain best-effort.
 Use `climate_off` for Off. These operations never retry as an automatic start.
 
 An optional `blowing_mode` positive integer adds the raw `blowingMode` outlet
