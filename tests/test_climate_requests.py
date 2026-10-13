@@ -211,3 +211,41 @@ def test_invalid_air_source_never_sends(value):
     with pytest.raises(ValueError):
         asyncio.run(client.climate_manual_on("VIN", cycling_mode=value))
     client._iov_call.assert_not_called()
+
+
+@pytest.mark.parametrize("compressor,flag", [(False, 0), (True, 1)])
+@pytest.mark.parametrize("generic", [False, True])
+def test_manual_start_can_run_the_fan_alone(compressor, flag, generic):
+    client, http, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value=ACCEPTED)
+
+    async def run():
+        await client.load()
+        if generic:
+            await client.command("VIN", "aircon-manual-on", temperature=24, currentDuration=5,
+                                 enableAirCompressor=flag, windStrength=3)
+        else:
+            await client.climate_manual_on("VIN", temperature=24, minutes=5, fan_speed=3, compressor=compressor)
+
+    asyncio.run(run())
+    body = client._iov_call.await_args.args[1]
+    assert body["operations"] == [{"enableAutoMode": 0, "enableAirCompressor": flag, "temperature": 24.0,
+                                   "temperatureUnit": 0, "windStrength": 3}]
+
+
+@pytest.mark.parametrize("value", [2, -1, None, 0.0, "0", float("nan")])
+@pytest.mark.parametrize("generic", [False, True])
+def test_invalid_compressor_flag_never_sends(value, generic):
+    client, http, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value=ACCEPTED)
+
+    async def run():
+        await client.load()
+        if generic:
+            await client.command("VIN", "aircon-manual-on", enableAirCompressor=value)
+        else:
+            await client.climate_manual_on("VIN", compressor=value)
+
+    with pytest.raises(ValueError):
+        asyncio.run(run())
+    client._iov_call.assert_not_called()

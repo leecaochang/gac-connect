@@ -51,7 +51,7 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
             description="automatic A/C on", ops=_AIR),
     # Verified on an Aion UT: omit blower/outlet fields to retain their settings.
     Command("aircon-manual-on", _p("air_condition/open"), "air", category="climate",
-            description="manual A/C on, optionally selecting fan speed 1–10",
+            description="manual A/C on, optionally selecting fan speed 1–10 or fan only",
             ops={"enableAutoMode": 0, "enableAirCompressor": 1,
                  "temperature": 24.0, "temperatureUnit": 0}),
     Command("aircon-off", _p("air_condition/close"), "flat-ops", stable=True, category="climate",
@@ -176,6 +176,13 @@ def validate_cycling_mode(mode: Any) -> int:
     return mode
 
 
+def validate_compressor(value: Any) -> int:
+    """Accept the compressor flag: 1 cools or heats, 0 runs the blower alone (the console's Fan)."""
+    if type(value) not in (bool, int) or value not in (0, 1):
+        raise ValueError("compressor must be 1 (on) or 0 (fan only)")
+    return int(value)
+
+
 SEAT_VENTILATION_LEVELS = range(4)   # 0 off, 1–3 strength, verified on an Aion UT's front seats
 
 
@@ -210,6 +217,8 @@ def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) 
             operation["blowingMode"] = validate_blowing_mode(operation["blowingMode"])
         if cmd.name == "aircon-manual-on" and "cyclingMode" in operation:
             operation["cyclingMode"] = validate_cycling_mode(operation["cyclingMode"])
+        if cmd.name == "aircon-manual-on":
+            operation["enableAirCompressor"] = validate_compressor(operation["enableAirCompressor"])
         identifier = {"vin": vin, "grade": 2}
         if cmd.kind == "air":
             identifier["duration"] = duration

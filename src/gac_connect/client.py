@@ -579,12 +579,15 @@ class GacClient:
     async def climate_manual_on(
         self, vin: str, *, temperature: float = 24.0, minutes: int = 30,
         fan_speed: int | None = None, blowing_mode: int | None = None, cycling_mode: int | None = None,
+        compressor: bool = True,
     ) -> Any:
         """Start manual A/C, optionally selecting the blower, outlet or air-source code.
 
         Omitted fan_speed/blowing_mode/cycling_mode fields preserve the vehicle's settings.
         Air source (cyclingMode) 1 recirculates and 2 draws fresh air on an Aion UT,
         which applies it only while its A/C is already running.
+        ``compressor=False`` runs the blower alone, the console's Fan mode; an Aion UT
+        accepted it both from off and while its A/C ran.
         A selection starts or renews the timed run at the supplied temperature.
         Fan speed uses 1–10; outlet codes must be calibrated for the vehicle.
         Manual startup and fan writes were verified on an Aion UT. Outlet codes
@@ -593,6 +596,8 @@ class GacClient:
         """
         target, duration = commands.validate_climate(temperature, minutes)
         params = {"temperature": target, "currentDuration": duration}
+        if not commands.validate_compressor(compressor):
+            params["enableAirCompressor"] = 0   # the envelope's default 1 runs the compressor
         if fan_speed is not None:
             params["windStrength"] = commands.validate_fan_speed(fan_speed)
         if blowing_mode is not None:
