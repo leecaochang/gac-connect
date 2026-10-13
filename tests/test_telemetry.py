@@ -117,7 +117,8 @@ def test_fridge_requires_a_nonempty_first_report(items, expected):
     assert status.raw is raw and raw == before
 
 
-def test_ut_calendar_reservation_survives_conflicting_timestamp_clock():
+def test_ut_once_calendar_and_timestamps_agree_on_the_service_clock():
+    """An app-made once window: Unix-ms times encode the calendar clock in UTC+8, not Asia/Bangkok."""
     raw = {"timezoneAccessor": {"timezone": "Asia/Bangkok"}, "chargingAccessors": [{
         "chargingMode": 1, "weeklyReservation": 0, "chargingEndType": 0,
         "dailyReservationStartTime": 1791727200000, "dailyReservationStopTime": 1791756000000,
@@ -128,19 +129,17 @@ def test_ut_calendar_reservation_survives_conflicting_timestamp_clock():
     status = VehicleStatus.from_results(raw)
     assert (status.charge_window_start, status.charge_window_stop) == ("22:00", "06:00")
     assert status.charge_time_format == "timestamp"
-    assert status.charge_clock_consistent is False
+    assert status.charge_clock_consistent is True
     assert status.charge_end_type == 0
     assert raw == before and status.raw is raw
 
 
-@pytest.mark.parametrize("zone,start,stop", [
-    ("Asia/Bangkok", "21:00", "05:00"), (None, None, None), ("Invalid/Zone", None, None),
-])
-def test_timestamp_only_reservation_requires_reported_zone(zone, start, stop):
+@pytest.mark.parametrize("zone", ["Asia/Bangkok", None, "Invalid/Zone"])
+def test_timestamp_only_reservation_reads_the_service_clock(zone):
     status = VehicleStatus.from_results({"timezoneAccessor": {"timezone": zone}, "chargingAccessors": [{
         "dailyReservationStartTime": 1791727200000, "dailyReservationStopTime": 1791756000000,
     }]})
-    assert (status.charge_window_start, status.charge_window_stop) == (start, stop)
+    assert (status.charge_window_start, status.charge_window_stop) == ("22:00", "06:00")
     assert status.charge_clock_consistent is None
 
 

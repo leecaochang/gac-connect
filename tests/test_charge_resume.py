@@ -12,7 +12,7 @@ RESERVATION = "/iov-vehicle-gateway/v1/platform/vehicle/access_gateway/charging/
 ACCEPTED = {"code": 13001, "data": {"sessionId": "charge"}}
 CALENDAR = {"year": 2026, "month": 10, "day": 14, "hour": 23, "minute": 0, "second": 0, "millisecond": 0}
 TIME_OF_DAY = {"dailyReservationStartTime": 23 * 3600000, "dailyReservationStopTime": 5 * 3600000,
-               "weeklyReservation": 31, "chargingMode": 1, "chargingEndType": 1}
+               "weeklyReservation": 31, "chargingMode": 2, "chargingEndType": 1}
 TIMESTAMP = {"dailyReservationStartTime": 1791993600000, "dailyReservationStopTime": 1792015200000,
              "weeklyReservation": 0, "chargingMode": 0, "chargingEndType": 0,
              "startTime": CALENDAR, "stopTime": {**CALENDAR, "day": 15, "hour": 5}}
@@ -66,15 +66,12 @@ def test_resume_resends_the_reported_window_and_stopping_rule_in_scheduled_mode(
         await client.resume_schedule("VIN")
 
     asyncio.run(run())
-    op = _sent(client)
+    op = _sent(client)   # repeat (loop) is resumed with times of day, dated for the next occurrence
     assert op["chargingMode"] == 2 and op["chargingEndType"] == report["chargingEndType"]
-    assert op["dailyReservationStartTime"] == report["dailyReservationStartTime"]
-    if "startTime" in report:       # a dated timestamp window is resent as reported
-        assert op["startTime"] == report["startTime"]
-    else:                           # a time-of-day window gets dates for its next occurrence
-        assert (op["startTime"]["hour"], op["startTime"]["minute"]) == (23, 0)
-        assert (op["stopTime"]["hour"], op["stopTime"]["minute"]) == (5, 0)
-        assert op["startTime"]["month"] > 0 and op["startTime"]["day"] > 0
+    assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (23 * 3600000, 5 * 3600000)
+    assert op["weeklyReservation"] == report["weeklyReservation"]
+    assert (op["startTime"]["hour"], op["startTime"]["minute"], op["stopTime"]["hour"]) == (23, 0, 5)
+    assert _when(op["stopTime"]) > _when(op["startTime"]) and op["startTime"]["month"] > 0
 
 
 def test_resume_without_a_reported_window_never_sends():
@@ -181,3 +178,27 @@ def test_undated_reported_fields_are_not_kept():
     window = vehicle.reported_window(UT_LOOP)
     assert "startTime" not in window and "stopTime" not in window
     assert window["chargingMode"] == 2 and window["weeklyReservation"] == 96
+
+
+# An Aion UT's report of an app-made once window, 22:06–22:12 on 13 Oct 2026 (Singapore gateway).
+UT_ONCE = {"dailyReservationStartTime": 1791900360000, "dailyReservationStopTime": 1791900720000,
+           "weeklyReservation": 0, "chargingMode": 1, "chargingEndType": 0, "reservationChargingFlag": 1,
+           "startTime": {"month": 10, "hour": 22, "year": 2026, "millisecond": 0, "day": 13, "minute": 6, "second": 0},
+           "stopTime": {"month": 10, "hour": 22, "year": 2026, "millisecond": 0, "day": 13, "minute": 12, "second": 0}}
+
+
+def test_resuming_an_app_once_window_rebuilds_it_for_the_next_occurrence():
+    client, _ = _client(UT_ONCE)
+
+    async def run():
+        await client.load()
+        await client.get_status("VIN")
+        client._iov_call = AsyncMock(return_value=ACCEPTED)
+        await client.charge_now("VIN")
+        await client.resume_schedule("VIN")
+
+    asyncio.run(run())
+    op = _sent(client)   # a reported once window (mode 1, Unix-ms) is resent as loop without days
+    assert (op["chargingMode"], op["weeklyReservation"]) == (2, 0)
+    assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (79560000, 79920000)
+    assert (op["startTime"]["hour"], op["startTime"]["minute"]) == (22, 6)

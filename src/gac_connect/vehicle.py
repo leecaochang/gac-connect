@@ -7,16 +7,20 @@ The gateway has no plain "start" / "stop"; charging is gated through the schedul
   applies it asynchronously and resuming can take several minutes.
 * **resume schedule** — the last reported window, scheduled again.
 * **pause** — unavailable until a continuous stop operation is verified.
-* **set window** — mode 2 (the app's "loop") repeating on the selected days, or
-  mode 1 (the app's "once") for the next occurrence only.
+* **set window** — loop mode (2) with times of day and calendar fields dated for
+  the next (selected) occurrence. Selected days repeat; no days (``weekly`` 0) is
+  a one-time window, which the car records as the app's "once" (mode 1). 127 is
+  every day.
 
-Gateway rules verified on an Aion UT (2026-10-13): mode 0 with any schedule field
-is refused with HTTP 400; a scheduled request without real dated
-``startTime``/``stopTime`` is refused with HTTP 400; loop mode is accepted with or
-without days; once mode (with or without days) and ``chargingEndType`` 1 are
-refused with 13101, so their app request format is still unknown.
+Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64).
 
-Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64; 0 = every day).
+Gateway behaviour verified on an Aion UT (2026-10-13): ``{"chargingMode": 0}``
+alone switches the schedule off and the car keeps its window; mode 0 with any
+schedule field is refused with HTTP 400. Loop mode with times of day and dated
+calendar fields is accepted with or without days. Mode 1 is refused with 13101,
+whether its times are of day or Unix ms, so a reported once window (mode 1,
+Unix-ms times encoding the calendar clock in UTC+8) is resent as loop without
+days. ``chargingEndType`` 1 is refused with 13101.
 """
 from __future__ import annotations
 
@@ -24,7 +28,7 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .const import IOV_PREFIX
+from .const import IOV_PREFIX, SERVICE_CLOCK
 from .errors import CommandError
 
 _RESERVATION = f"{IOV_PREFIX}/charging/reservation"
@@ -119,9 +123,9 @@ def reported_window(charging: object) -> dict | None:
     """The reservation window fields of a ``chargingAccessors`` report, or None.
 
     Both daily times must be usable milliseconds-of-day or Unix-ms values, as the
-    car reported them. Calendar structs are kept only when they form a real date:
-    an Aion UT reports repeating windows undated (year 2000, month and day 0),
-    and the gateway rejects such a request with HTTP 400.
+    car reported them. Calendar structs are kept only when they form a real date
+    (an Aion UT reports app-made repeating windows undated: year 2000, month and
+    day 0).
     """
     if not isinstance(charging, dict):
         return None
@@ -144,25 +148,44 @@ def reported_window(charging: object) -> dict | None:
     return window
 
 
+def _build(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int, end_type: int,
+           now: datetime | None) -> dict:
+    """Loop mode with times of day, dated for the next occurrence (on a selected day, if any)."""
+    start, stop = _next_window(sh, sm, eh, em, tz, weekly, now)
+    return _operation(_ms_of_day(sh, sm), _ms_of_day(eh, em), weekly, MODE_LOOP, end_type,
+                      start_struct=_struct(start), stop_struct=_struct(stop))
+
+
+def _window_clock(window: dict) -> tuple[int, int, int, int]:
+    """Start and stop clock (hour, minute) of a reported window."""
+    start, stop = window["dailyReservationStartTime"], window["dailyReservationStopTime"]
+    if start < 86_400_000 and stop < 86_400_000:
+        return start // 3_600_000, start // 60_000 % 60, stop // 3_600_000, stop // 60_000 % 60
+    first, last = window.get("startTime"), window.get("stopTime")
+    if first and last:
+        return first["hour"], first["minute"], last["hour"], last["minute"]
+    begin, end = (datetime.fromtimestamp(value / 1000, SERVICE_CLOCK) for value in (start, stop))
+    return begin.hour, begin.minute, end.hour, end.minute
+
+
 def preserved_operation(window: dict, mode: int, *, until_soc: bool | None = None,
                         tz: ZoneInfo | None = None, now: datetime | None = None) -> dict:
-    """Schedule a reported window again in ``mode`` (optionally changing the stopping rule).
+    """Schedule a reported window again (optionally changing the stopping rule).
 
-    The daily times and days are resent as the car reported them. The gateway
-    refuses a scheduled request without real dated calendar fields (HTTP 400), so
-    for milliseconds-of-day windows they are dated for the next occurrence in
-    ``tz`` (on a selected day, except in once mode); a timestamp window keeps the
-    dated fields it reported.
+    The reported clock times are kept and rebuilt in loop mode, dated for the next
+    occurrence in ``tz``: with the reported days for a repeating window, without
+    days for a once window (``mode`` 1). Without ``tz`` the reported fields are
+    resent as they are, in ``mode``.
     """
-    start, stop = window["dailyReservationStartTime"], window["dailyReservationStopTime"]
-    weekly = window["weeklyReservation"]
-    structs = window.get("startTime"), window.get("stopTime")
-    if tz is not None and start < 86_400_000 and stop < 86_400_000:
-        begin, end = _next_window(start // 3_600_000, start // 60_000 % 60, stop // 3_600_000, stop // 60_000 % 60,
-                                  tz, 0 if mode == MODE_SCHEDULED else weekly, now)
-        structs = _struct(begin), _struct(end)
     end_type = window["chargingEndType"] if until_soc is None else END_AT_SOC if until_soc else END_AT_TIME
-    return _operation(start, stop, weekly, mode, end_type, start_struct=structs[0], stop_struct=structs[1])
+    if tz is not None:
+        sh, sm, eh, em = _window_clock(window)
+        if (sh, sm) != (eh, em):
+            weekly = 0 if mode == MODE_SCHEDULED else window["weeklyReservation"]
+            return _build(sh, sm, eh, em, tz, weekly, end_type, now)
+    return _operation(window["dailyReservationStartTime"], window["dailyReservationStopTime"],
+                      window["weeklyReservation"], mode, end_type,
+                      start_struct=window.get("startTime"), stop_struct=window.get("stopTime"))
 
 
 def pause_operation(tz: ZoneInfo) -> dict:
@@ -178,7 +201,7 @@ def validate_clock(value: str) -> str:
 
 
 def validate_weekly(weekly: int | float) -> int:
-    """Validate a Mon=1 through Sun=64 day mask; zero means every day."""
+    """Validate a Mon=1 through Sun=64 day mask; zero means once (the next occurrence only)."""
     if (isinstance(weekly, bool) or not isinstance(weekly, (int, float))
             or not 0 <= weekly <= 127 or weekly != int(weekly)):
         raise ValueError("weekly must be an integer from 0 to 127")
@@ -186,15 +209,11 @@ def validate_weekly(weekly: int | float) -> int:
 
 
 def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
-                     weekly: int = 0, until_soc: bool = False, now: datetime | None = None,
-                     timestamp_times: bool = False, once: bool = False) -> dict:
-    """Build a charge window the way the app does.
+                     weekly: int = 0, until_soc: bool = False, now: datetime | None = None) -> dict:
+    """Build a charge window: selected days repeat, 127 is every day, and 0 is one time (the app's Once).
 
-    Repeating (default): the app's loop mode on the ``weekly`` days (0 sends every
-    day, 127). One-time (``once``): the app's once mode. Both carry calendar fields
-    dated for the next (selected) occurrence, with the stop strictly after the
-    start; the gateway rejects undated fields. An Aion UT later reports a
-    repeating window undated (year 2000, month and day 0).
+    The calendar fields are dated for the next (selected) occurrence, with the
+    stop strictly after the start.
     """
     validate_clock(start_hhmm)
     validate_clock(stop_hhmm)
@@ -203,17 +222,6 @@ def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
         raise ValueError("start and stop must differ; use Charge now for unrestricted charging")
     if not isinstance(until_soc, bool):
         raise ValueError("until_soc must be a boolean")
-    if not isinstance(once, bool):
-        raise ValueError("once must be a boolean")
-    if once and weekly:
-        raise ValueError("a one-time window cannot repeat on selected days")
     sh, sm = map(int, start_hhmm.split(":"))
     eh, em = map(int, stop_hhmm.split(":"))
-    start, stop = _next_window(sh, sm, eh, em, tz, weekly, now)
-    mode, days = (MODE_SCHEDULED, 0) if once else (MODE_LOOP, weekly or EVERY_DAY)
-    return _operation(
-        int(start.timestamp() * 1000) if timestamp_times else _ms_of_day(sh, sm),
-        int(stop.timestamp() * 1000) if timestamp_times else _ms_of_day(eh, em), days, mode,
-        END_AT_SOC if until_soc else END_AT_TIME,
-        start_struct=_struct(start), stop_struct=_struct(stop),
-    )
+    return _build(sh, sm, eh, em, tz, weekly, END_AT_SOC if until_soc else END_AT_TIME, now)

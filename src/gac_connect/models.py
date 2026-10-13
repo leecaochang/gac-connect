@@ -17,7 +17,8 @@ with the gateway's quirks resolved:
   companion is explicitly 0/false are not valid → None (a missing flag counts as valid);
 * chargingMode follows the app: 0 immediately, 1 once, 2 loop;
 * reservations can use calendar fields, Unix milliseconds, or milliseconds-of-day;
-  explicit calendar fields take precedence over timestamp clock conversions.
+  explicit calendar fields take precedence; Unix milliseconds encode the calendar
+  clock on the service clock (UTC+8), whatever the reported time zone.
 
 The raw ``results`` dict is retained on ``.raw`` so anything not modelled here is
 still reachable.
@@ -29,7 +30,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from .const import SERVICE_CLOCK
 
 
 class ChargingStatus(IntEnum):
@@ -153,13 +155,14 @@ def _calendar_clock(value: Any) -> str | None:
         return None
 
 
-def _timestamp_clock(value: Any, zone: Any) -> str | None:
+def _timestamp_clock(value: Any) -> str | None:
+    """A reservation timestamp as the calendar clock it encodes (service clock, UTC+8)."""
     stamp = _exact_int(value)
-    if stamp is None or not 86_400_000 <= stamp < 253402300800000 or not isinstance(zone, str):
+    if stamp is None or not 86_400_000 <= stamp < 253402300800000:
         return None
     try:
-        return datetime.fromtimestamp(stamp / 1000, ZoneInfo(zone)).strftime("%H:%M")
-    except (ValueError, OverflowError, OSError, ZoneInfoNotFoundError):
+        return datetime.fromtimestamp(stamp / 1000, SERVICE_CLOCK).strftime("%H:%M")
+    except (ValueError, OverflowError, OSError):
         return None
 
 
@@ -380,14 +383,12 @@ class VehicleStatus:
                 _exact_int(item.get("temperatureMode")), wind_code,
             )
 
-        timezone = results.get("timezoneAccessor")
-        zone = (timezone if isinstance(timezone, dict) else _first(results, "timezoneAccessor")).get("timezone")
         clocks = []
         comparisons = []
         for struct_key, time_key in (("startTime", "dailyReservationStartTime"),
                                      ("stopTime", "dailyReservationStopTime")):
             calendar = _calendar_clock(chg.get(struct_key))
-            timestamp = _timestamp_clock(chg.get(time_key), zone)
+            timestamp = _timestamp_clock(chg.get(time_key))
             clocks.append(calendar or _hhmm(chg.get(time_key)) or timestamp)
             if calendar is not None and timestamp is not None:
                 comparisons.append(calendar == timestamp)

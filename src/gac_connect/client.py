@@ -148,7 +148,6 @@ class GacClient:
         self._limiters = (limiter, DEFAULT_LIMITER) if limiter not in (None, DEFAULT_LIMITER) else (DEFAULT_LIMITER,)
         self._auth_dead = False      # a refresh failed for good; only a new session clears it
         self._dead_refresh: str | None = None
-        self._charge_time_formats: dict[str, str] = {}
         self._charge_windows: dict[str, dict] = {}   # last usable reported reservation, per VIN
 
     def _zone(self) -> ZoneInfo:
@@ -474,10 +473,9 @@ class GacClient:
         if not isinstance(reports, list) or not reports or not isinstance(reports[0], dict):
             raise ResponseError("vehicle status response has no valid report")
         status = VehicleStatus.from_results(reports[0], online=data.get("online"), updated_ms=data.get("updateTime"))
-        if status.charge_time_format is not None:
-            self._charge_time_formats[vin] = status.charge_time_format
         charging = reports[0].get("chargingAccessors")
-        if (window := vehicle.reported_window(charging[0] if isinstance(charging, list) and charging else None)):
+        charging = charging[0] if isinstance(charging, list) and charging else None
+        if (window := vehicle.reported_window(charging)):
             previous = self._charge_windows.get(vin, {})
             if "chargingMode" not in window and "chargingMode" in previous:
                 window["chargingMode"] = previous["chargingMode"]   # free now; remember how it was scheduled
@@ -672,17 +670,12 @@ class GacClient:
         raise CommandError(vehicle.PAUSE_UNSUPPORTED)
 
     async def set_charge_window(self, vin: str, start: str, stop: str, *,
-                                weekly: int = 0, until_soc: bool = False, once: bool = False) -> Any:
-        """Schedule charging on the ``weekly`` days (0 = every day), or ``once`` for the next occurrence.
+                                weekly: int = 0, until_soc: bool = False) -> Any:
+        """Schedule charging on the ``weekly`` days, or once (``weekly`` 0) for the next occurrence.
 
-        Uses the time representation learned by get_status for this vehicle;
-        before any usable report, the milliseconds-of-day format. A timestamp
-        request uses the configured scheduling zone for both dates and
-        timestamps. Acceptance still needs vehicle confirmation.
+        Times are car-local in the scheduling zone. Acceptance still needs vehicle confirmation.
         """
-        op = vehicle.window_operation(start, stop, self._zone(),
-                                      weekly=weekly, until_soc=until_soc, once=once,
-                                      timestamp_times=self._charge_time_formats.get(vin) == "timestamp")
+        op = vehicle.window_operation(start, stop, self._zone(), weekly=weekly, until_soc=until_soc)
         return await self._reservation(vin, op)
 
     async def _reservation(self, vin: str, operation: dict) -> Any:

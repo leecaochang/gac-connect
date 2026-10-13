@@ -1,6 +1,7 @@
 """Endpoints, regions and protocol constants for the GAC international API."""
 from __future__ import annotations
 
+from datetime import timedelta, timezone
 from typing import Final
 
 # Main account API and the IoV vehicle gateway are two separate backends with
@@ -164,6 +165,11 @@ MAX_RATE_LIMIT_COOLDOWN: Final = 86400.0
 # If a saved request-limit record is corrupt, any pause in it is unknown: pause as
 # long as the longest pause the service could have asked for.
 RECOVERY_PAUSE: Final = MAX_RATE_LIMIT_COOLDOWN
+
+# The clock the service uses for charge-reservation timestamps: on the Singapore
+# gateway an Aion UT in Asia/Bangkok reports a once window at 22:06 as 22:06+08:00.
+# Other gateways are unverified; decoding prefers the calendar fields anyway.
+SERVICE_CLOCK: Final = timezone(timedelta(hours=8))
 
 # Gateway result codes.
 CODE_OK: Final = "0000"
