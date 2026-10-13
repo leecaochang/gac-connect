@@ -212,3 +212,97 @@ def test_transport_error_preserves_credentials_and_allows_later_refresh(error):
         assert (await store.load()).refresh_token == "next"
         assert http.post.call_count == 2
     asyncio.run(run())
+
+
+class RawResponse(Response):
+    def __init__(self, raw, status=200):
+        super().__init__(status)
+        self.raw = raw
+
+    async def read(self):
+        return self.raw
+
+
+@pytest.mark.parametrize("response", [RawResponse(b"<html>maintenance</html>"), Response(status=302)])
+def test_unreadable_replies_are_response_errors_not_command_rejections(response):
+    from gac_connect.errors import CommandError, ResponseError
+    client, http, _ = make_client(response, valid=True)
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError) as caught:
+            await client.get_status("VIN")
+        assert not isinstance(caught.value, CommandError)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("body", [{"success": False, "code": "4401"}, {"success": True}, {"success": True, "data": []},
+                                  None])
+def test_a_failed_vehicle_list_raises_instead_of_reporting_no_vehicles(body):
+    from gac_connect.errors import ResponseError
+    client, _, _ = make_client(Response(body=body), valid=True)
+    with pytest.raises(ResponseError):
+        asyncio.run(client.list_vehicles())
+
+
+def test_vehicle_list_combines_both_lists_and_skips_records_without_a_vin():
+    client, _, _ = make_client(Response(body={"success": True, "data": {
+        "bindVehicles": [{"vin": "V1", "vehStyleName": "AION UT"}, {"plateNo": "NO-VIN"}, "junk"],
+        "authorizedVehicles": [{"vinCode": "V2"}, {"vin": "  "}],
+    }}), valid=True)
+    vehicles = asyncio.run(client.list_vehicles())
+    assert [v.vin for v in vehicles] == ["V1", "V2"]
+
+
+def _captcha_client(*responses):
+    from gac_connect.auth import Captcha
+    client, http, _ = make_client(Response(), valid=True)
+    http.post.side_effect = list(responses)
+    client._captcha = Captcha("", "", "k" * 32 + "@DS@" + "i" * 16, "token")
+    return client, http
+
+
+@pytest.mark.parametrize("sms", [{"success": True}, {"success": True, "data": None},
+                                 {"success": True, "data": {"verifyCodeTicket": 7}}])
+def test_sms_request_with_a_malformed_success_is_a_login_error(sms):
+    from gac_connect.errors import LoginError
+    client, http = _captcha_client(Response(body={"success": True}), Response(body=sms))
+    with pytest.raises(LoginError):
+        asyncio.run(client.request_sms("0812345678", 10))
+    assert client._verify_ticket is None
+
+
+@pytest.mark.parametrize("login", [{"success": True}, {"success": True, "data": None},
+                                   {"success": True, "data": {"refreshToken": "r"}}])
+def test_code_login_without_a_token_never_starts_the_vehicle_session(login):
+    from gac_connect.errors import LoginError
+    client, http = _captcha_client(Response(body=login))
+    client._verify_ticket = "ticket"
+    with pytest.raises(LoginError):
+        asyncio.run(client.login_sms("0812345678", "123456"))
+    assert http.post.call_count == 1
+
+
+@pytest.mark.parametrize("body", [{"success": False, "code": "0000", "data": {}}, {"code": "SDK.GATE.0017"}, None])
+def test_a_failed_position_read_raises(body):
+    from gac_connect.errors import ResponseError
+    client, _, _ = make_client(Response(body=body), valid=True)
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError):
+            await client.get_position("VIN")
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("name", ["lock", "status", "horn-on"])
+def test_raw_overrides_cannot_replace_the_vehicle_identity(name):
+    from gac_connect.commands import CATALOG, build_body
+    body = build_body(CATALOG[name], "VIN", {"vin": "OTHER", "extra": 1})
+    assert body["vin"] == "VIN" and body["extra"] == 1
+
+
+def test_anti_bodies_keep_their_identifier():
+    from gac_connect.commands import Command, build_body
+    body = build_body(Command("x", "/x", "anti"), "VIN", {"identifier": {"vin": "OTHER"}, "currentDuration": 10})
+    assert body == {"identifier": {"vin": "VIN"}, "currentDuration": 10}

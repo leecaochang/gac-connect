@@ -155,11 +155,17 @@ def validate_blowing_mode(mode: Any) -> int:
 
 
 def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) -> dict:
+    """Assemble a request body; overrides never replace the vehicle identity.
+
+    The body VIN must match the encrypted ``vin`` header, so top-level ``vin``
+    and ``identifier`` overrides are ignored.
+    """
     overrides = overrides or {}
     if cmd.kind in ("read", "flat"):
-        return {"vin": vin, **overrides}
+        return {**overrides, "vin": vin}
     if cmd.kind == "anti":
-        return {"identifier": {"vin": vin}, "currentDuration": 30, **overrides}
+        extra = {k: v for k, v in overrides.items() if k != "identifier"}
+        return {"identifier": {"vin": vin}, "currentDuration": 30, **extra}
     if cmd.kind == "ops":
         return {"identifier": {"vin": vin}, "operations": [{**cmd.ops, **overrides}]}
     if cmd.kind in ("air", "air-adjust"):

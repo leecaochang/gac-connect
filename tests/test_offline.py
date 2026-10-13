@@ -685,10 +685,10 @@ def test_retry_after_forms():
 def test_redirects_are_not_followed():
     import asyncio
     import pytest
-    from gac_connect.errors import CommandError
+    from gac_connect.errors import ResponseError
     http = _FakeHttp(_FakeResp(status=302, headers={"Location": "https://elsewhere/"}))
     c = _client(http)
-    with pytest.raises(CommandError):
+    with pytest.raises(ResponseError):
         asyncio.run(c.get_status("VIN"))
     assert http.calls == 1
     assert http.kwargs[0]["allow_redirects"] is False and http.kwargs[0]["raise_for_status"] is False

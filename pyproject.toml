@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gac-connect"
-version = "0.4.0b10"
+version = "0.4.0b11"
 description = "Unofficial async client for GAC / Aion international connected-car accounts"
 readme = "README.md"
 requires-python = ">=3.11"

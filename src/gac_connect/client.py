@@ -4,7 +4,7 @@
         client = GacClient("AU", http)
         captcha = await client.start_captcha()
         # ... user solves the puzzle, giving x ...
-        await client.request_sms(mobile, captcha, x)
+        await client.request_sms(mobile, x)
         await client.login_sms(mobile, code)
         vehicles = await client.list_vehicles()
         status = await client.get_status(vehicles[0].vin)
@@ -45,6 +45,7 @@ import aiohttp
 from . import commands, vehicle
 from .auth import Captcha
 from .const import (
+    APP_VERSION,
     CODE_COMMAND_ACCEPTED,
     ERR_REFRESH_SPENT,
     ERR_TOKEN_INVALID,
@@ -139,6 +140,7 @@ class GacClient:
         self._iov_app_id = PROFILE_IOV_APP_ID.get(profile, IOV_APP_ID)
         self._session = Session(region=region)
         self._captcha: Captcha | None = None
+        self._verify_ticket: str | None = None
         # Every request passes the process-wide limiter; a caller's own limiter (for
         # example one kept in a file) is applied on top of it, never instead of it.
         self._limiters = (limiter, DEFAULT_LIMITER) if limiter not in (None, DEFAULT_LIMITER) else (DEFAULT_LIMITER,)
@@ -195,14 +197,14 @@ class GacClient:
                         pause = max(limiter.block(seconds) for limiter in self._limiters)
                         raise RateLimitedError("the service rate-limited the request", retry_after=pause)
                     if 300 <= resp.status < 400:
-                        raise CommandError(f"unexpected redirect ({resp.status}) from {path}; not followed")
+                        raise ResponseError(f"unexpected redirect ({resp.status}) from {path}; not followed")
                     if resp.status >= 400:
                         raise ResponseError(f"HTTP {resp.status} from {path}")
                     raw = await resp.read()
             try:
                 outer = _loads(raw)
             except ValueError as exc:
-                raise CommandError(f"non-JSON response ({resp.status}) from {path}") from exc
+                raise ResponseError(f"non-JSON response ({resp.status}) from {path}") from exc
             if isinstance(outer, dict) and outer.get("encryptData"):
                 plain = decrypt_envelope(outer, self._response_key(host))
                 if plain is not None:
@@ -218,7 +220,7 @@ class GacClient:
         wrapper, _, _ = encrypt_envelope(body, self._m.main.public)
         headers = {
             "user-agent": USER_AGENT, "fnc-app-type": "android", "locale": "en",
-            "fnc-fnc-os-version-type": "2.0.25", "fnc-app-id": MAIN_APP_ID,
+            "fnc-fnc-os-version-type": APP_VERSION, "fnc-app-id": MAIN_APP_ID,
             "fnc-timestamp": _now_ms(), "region": self.region,
             "fnc-client-timezone": self.timezone, "fnc-requestId": _request_id(),
             "content-type": "application/json; charset=utf-8",
@@ -233,7 +235,7 @@ class GacClient:
         wrapper, key, iv = encrypt_envelope(body, self._m.iov.public)
         headers = {
             "user-agent": USER_AGENT, "fnc-app-type": "android", "locale": "en",
-            "fnc-fnc-os-version-type": "2.0.25", "fnc-request-id": _request_id(),
+            "fnc-fnc-os-version-type": APP_VERSION, "fnc-request-id": _request_id(),
             "content-type": "application/json; charset=utf-8", "fnc-version": IOV_VERSION,
             "fnc-app-id": self._iov_app_id, "fnc-timestamp": _now_ms(),
             "fnc-icv-timezone": self.timezone,
@@ -286,13 +288,15 @@ class GacClient:
              "captchaTicket": c.ticket(x), "captchaRandomStr": c.point_json(x),
              "type": 1, "sendType": None},
         )
-        if not self._ok(resp) or not self._data(resp).get("verifyCodeTicket"):
+        data = self._data(resp)
+        ticket = data.get("verifyCodeTicket") if isinstance(data, dict) else None
+        if not self._ok(resp) or not isinstance(ticket, str) or not ticket:
             raise LoginError(f"could not send SMS code: {_msg(resp)}")
-        self._verify_ticket = self._data(resp)["verifyCodeTicket"]
+        self._verify_ticket = ticket
 
     async def login_sms(self, mobile: str, code: str) -> None:
         """Complete sign-in with the SMS code, then mint an IoV session."""
-        ticket = getattr(self, "_verify_ticket", None)
+        ticket = self._verify_ticket
         if not ticket:
             raise LoginError("request_sms must succeed first")
         resp = await self._main_call("/iam/api/user/login/code/sec", {
@@ -300,9 +304,9 @@ class GacClient:
             "countryTelCode": self._cfg["tel"], "mobile": local_mobile(mobile, self._cfg["tel"]), "email": "",
             "protocolList": ["COMMON_PRIVACY_POLICY", "COMMON_USER_AGREEMENT"],
         })
-        if not self._ok(resp):
-            raise LoginError(f"code login failed: {_msg(resp)}")
         d = self._data(resp)
+        if not self._ok(resp) or not isinstance(d, dict) or not isinstance(d.get("token"), str) or not d["token"]:
+            raise LoginError(f"code login failed: {_msg(resp)}")
         self._session.main_token = d.get("token")
         self._session.main_refresh_token = d.get("refreshToken")
         await self._establish_iov()
@@ -432,11 +436,18 @@ class GacClient:
 
     # ---- reads -----------------------------------------------------------
     async def list_vehicles(self) -> list[Vehicle]:
+        """Vehicles bound to or shared with the account; a failed query raises instead of returning none."""
         resp = await self._main_call("/icv/api/my-vehicle/list/sec", {},
                                      authorization=self._session.main_token)
-        d = self._data(resp) or {}
-        records = (d.get("bindVehicles") or []) + (d.get("authorizedVehicles") or [])
-        return [Vehicle.from_record(r) for r in records if isinstance(r, dict)]
+        d = self._data(resp)
+        if not self._ok(resp) or not isinstance(d, dict):
+            safe_code = _safe_result_code(resp.get("code") if isinstance(resp, dict) else None)
+            detail = f"result code {safe_code}" if safe_code is not None else "no recognized result code"
+            raise ResponseError(f"vehicle list was not accepted ({detail})")
+        records = [r for key in ("bindVehicles", "authorizedVehicles")
+                   if isinstance(d.get(key), list) for r in d[key]]
+        vehicles = [Vehicle.from_record(r) for r in records if isinstance(r, dict)]
+        return [v for v in vehicles if isinstance(v.vin, str) and v.vin.strip()]
 
     async def get_status(self, vin: str) -> VehicleStatus:
         resp = await self._iov_read(commands.CATALOG["status"].path, {"vin": vin}, sensitive={"vin": vin})
@@ -451,7 +462,12 @@ class GacClient:
 
     async def get_position(self, vin: str) -> dict:
         resp = await self._iov_read(commands.CATALOG["position"].path, {"vin": vin}, sensitive={"vin": vin})
-        return self._data(resp) or {}
+        data = self._data(resp)
+        if not isinstance(resp, dict) or resp.get("success") is False or not isinstance(data, dict):
+            safe_code = _safe_result_code(resp.get("code") if isinstance(resp, dict) else None)
+            detail = f"result code {safe_code}" if safe_code is not None else "no valid data"
+            raise ResponseError(f"vehicle position response was not accepted ({detail})")
+        return data
 
     async def get_control_capabilities(self, vin: str) -> dict:
         """Read the app's raw capability response without issuing a control.
