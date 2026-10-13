@@ -409,3 +409,18 @@ def test_http_error_replies_are_logged_as_a_bounded_masked_excerpt(caplog):
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("HTTP 400"))
     assert "startTime invalid for <VIN>" in line and "LGXCE4CB0SA000001" not in line
     assert len(line.split(": ", 1)[1]) == 400
+
+
+def test_command_bodies_are_logged_without_the_vin(caplog):
+    import logging
+    from unittest.mock import AsyncMock
+    client, _, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value={"code": 13001})
+    caplog.set_level(logging.DEBUG, logger="gac_connect.client")
+
+    async def run():
+        await client.load()
+        await client.set_charge_window("LGXCE4CB0SA000001", "22:06", "22:12", weekly=96)
+    asyncio.run(run())
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("command charging/reservation"))
+    assert "LGXCE4CB0SA000001" not in line and '"weeklyReservation": 96' in line and '"vin": "<VIN>"' in line

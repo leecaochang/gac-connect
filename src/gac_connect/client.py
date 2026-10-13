@@ -555,6 +555,8 @@ class GacClient:
     async def _dispatch_command(self, path: str, body: dict, vin: str) -> Any:
         await self._ensure_token()
         used = self._session.token
+        _LOGGER.debug("command %s: %s", path.rsplit("/access_gateway/", 1)[-1],
+                      _excerpt(body, 1000).replace(vin, "<VIN>"))
         resp = await self._iov_call(path, body, sensitive={"vin": vin}, kind="command")
         try:
             return _command_result(resp)
