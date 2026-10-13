@@ -1307,3 +1307,91 @@ def test_uk_profile_selects_its_own_backend():
     # An International region is unaffected.
     assert REGIONS["AU"]["profile"] == "intl"
     assert REGIONS["AU"]["main"].endswith("gac-international.com")
+
+
+
+def _renewal_route(*, sso_ok=True, account_ok=True, sso_fails_first=False, status_ok=True):
+    """A spent vehicle refresh token, with the account session answering as configured."""
+    import json
+    state = {"sso": 0}
+    def route(url):
+        if url.endswith("/refresh/token"):
+            body = {"success": False, "code": "ACCOUNT.0015"}
+        elif url.endswith("/iam/sso/login/sec"):
+            state["sso"] += 1
+            ok = sso_ok and not (sso_fails_first and state["sso"] == 1)
+            body = {"success": True, "data": "TICKET"} if ok else {"success": False, "code": "4406"}
+        elif url.endswith("/gateway/sso/login"):
+            body = {"success": True, "data": {"token": "v2", "refreshToken": "vr2",
+                                              "expireTime": 10**14, "rexpireTime": 10**14}}
+        elif url.endswith("/iam/api/user/token/refresh/sec"):
+            body = ({"success": True, "code": "0000", "data": {"token": "m2", "refreshToken": "mr2"}}
+                    if account_ok else {"success": False, "code": "4406"})
+        else:
+            return _FakeResp()
+        return _FakeResp(body=json.dumps(body).encode())
+    return route
+
+
+def _with_account(c):
+    c._session.main_token, c._session.main_refresh_token = "m1", "mr1"
+    return c
+
+
+def test_a_spent_vehicle_session_is_renewed_from_the_account_session():
+    import asyncio
+    http = _FakeHttp(route=_renewal_route())
+    c = _with_account(_client(http, token_valid=False))
+    asyncio.run(c.get_status("VIN"))
+    assert [u.split("/gateway", 1)[-1] for u in http.paths] == [
+        "/refresh/token", "/v1/iam/sso/login/sec", "/sso/login", "/v1/iam/api/user/token/refresh/sec",
+        "/iov-vehicle-gateway/v1/platform/vehicle/access_gateway/get_vehicle_status"]
+    assert (c.session.token, c.session.refresh_token, c.session.main_token) == ("v2", "vr2", "m2")
+    assert not c._auth_dead
+
+
+def test_a_refused_ticket_exchange_refreshes_the_account_token_once():
+    import asyncio
+    http = _FakeHttp(route=_renewal_route(sso_fails_first=True))
+    c = _with_account(_client(http, token_valid=False))
+    asyncio.run(c.get_status("VIN"))
+    assert sum(p.endswith("/iam/sso/login/sec") for p in http.paths) == 2
+    assert c.session.token == "v2" and not c._auth_dead
+
+
+def test_without_a_working_account_session_a_sign_in_is_needed_once():
+    import asyncio
+    import pytest
+    from gac_connect.errors import AuthExpiredError
+    http = _FakeHttp(route=_renewal_route(sso_ok=False, account_ok=False))
+    c = _with_account(_client(http, token_valid=False))
+    async def go():
+        for _ in range(3):
+            with pytest.raises(AuthExpiredError):
+                await c.get_status("VIN")
+    asyncio.run(go())
+    assert [u.split("/gateway", 1)[-1] for u in http.paths] == [
+        "/refresh/token", "/v1/iam/sso/login/sec", "/v1/iam/api/user/token/refresh/sec"]
+    assert c._auth_dead
+
+
+def test_a_network_failure_while_renewing_does_not_give_up_the_session():
+    import asyncio
+    import pytest
+    from gac_connect.errors import ResponseError
+    route = _renewal_route()
+    down = {"on": True}
+    def flaky(url):
+        if down["on"] and url.endswith("/iam/sso/login/sec"):
+            return _FakeResp(status=503, body=b"unavailable")
+        return route(url)
+    http = _FakeHttp(route=flaky)
+    c = _with_account(_client(http, token_valid=False))
+    async def go():
+        with pytest.raises(ResponseError):
+            await c.get_status("VIN")
+        assert not c._auth_dead
+        down["on"] = False
+        await c.get_status("VIN")
+    asyncio.run(go())
+    assert c.session.token == "v2"

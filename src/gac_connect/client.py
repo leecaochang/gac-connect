@@ -363,18 +363,45 @@ class GacClient:
         if not (self._session.main_token and self._session.main_refresh_token):
             return
         try:
-            resp = await self._main_call(
-                "/iam/api/user/token/refresh/sec", {"refreshToken": self._session.main_refresh_token},
-                authorization=self._session.main_token,
-            )
+            await self._refresh_account_token()
         except (GacError, aiohttp.ClientError, TimeoutError):
             _LOGGER.warning("Account rotation failed; sign-in is usable but later app sign-in may end it")
-            return
+
+    async def _refresh_account_token(self) -> bool:
+        """Replace the account token with a fresh one; False if the service refuses."""
+        resp = await self._main_call(
+            "/iam/api/user/token/refresh/sec", {"refreshToken": self._session.main_refresh_token},
+            authorization=self._session.main_token,
+        )
         d = self._data(resp)
-        if self._ok(resp) and isinstance(d, dict) and d.get("token"):
-            self._session.main_token = d["token"]
-            self._session.main_refresh_token = d.get("refreshToken") or self._session.main_refresh_token
-            await self._persist()
+        if not (self._ok(resp) and isinstance(d, dict) and d.get("token")):
+            return False
+        self._session.main_token = d["token"]
+        self._session.main_refresh_token = d.get("refreshToken") or self._session.main_refresh_token
+        await self._persist()
+        return True
+
+    async def _renew_from_account(self) -> bool:
+        """Mint a new vehicle session from the saved account session, without signing in again.
+
+        The vehicle session can run out or be retired while the account session that
+        minted it still works. If the ticket exchange is refused, the account token is
+        refreshed once and the exchange tried again. False means the account session
+        is gone too (or was never saved), so a new sign-in is needed. Network and
+        rate-limit errors propagate, so the session is not given up over them.
+        """
+        if not (self._session.main_token and self._session.main_refresh_token):
+            return False
+        for attempt in range(2):
+            try:
+                await self._establish_iov()
+            except LoginError:
+                if attempt or not await self._refresh_account_token():
+                    return False
+            else:
+                _LOGGER.info("Renewed the vehicle session from the saved account session; no sign-in needed")
+                return True
+        return False
 
     def _apply_iov_tokens(self, d: dict) -> None:
         self._session.token = d.get("token")
@@ -432,6 +459,8 @@ class GacClient:
                 if not _complete_iov_tokens(d):
                     raise ResponseError("refresh response has no usable token; credentials retained")
             except AuthExpiredError:
+                if await self._renew_from_account():
+                    return
                 self._auth_dead, self._dead_refresh = True, self._session.refresh_token
                 # Store the dead session without its tokens, so other clients on this
                 # store and later runs fail locally instead of trying it again.
