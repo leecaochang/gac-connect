@@ -195,7 +195,8 @@ class PushClient:
                 if not info.host or not info.topics:
                     raise GacError("push channel unavailable: no broker details")
                 if not info.tls and not self._allow_plaintext:
-                    raise GacError("push channel refused: broker is not TLS and plaintext is not allowed")
+                    raise GacError(f"push channel refused: broker {info.host}:{info.port} is not TLS "
+                                   "and plaintext is not allowed")
                 async with aiomqtt.Client(
                     info.host, port=info.port, username=info.username, password=info.password,
                     identifier=info.client_id, keepalive=60,
