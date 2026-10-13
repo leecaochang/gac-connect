@@ -27,8 +27,8 @@ try:
 except ImportError:  # pragma: no cover
     aiomqtt = None
 
-from .const import CODE_UNSUPPORTED_VALUE, SUCCESS_RESULT_CODES
-from .errors import GacError
+from .const import SUCCESS_RESULT_CODES
+from .errors import REFUSAL_CODES, GacError, result_reason
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,16 +38,17 @@ STABLE_SECONDS = 60          # a connection this old resets the reconnect backof
 
 # Result codes with a known meaning; anything else is reported as unknown.
 SUCCESS_CODES = SUCCESS_RESULT_CODES | {"200", "success"}
-FAILURE_CODES = frozenset({str(CODE_UNSUPPORTED_VALUE), "13101", "13102", "13103", "fail", "failed", "error"})
+FAILURE_CODES = REFUSAL_CODES | {"fail", "failed", "error"}
 
 
 def _topics(value: Any) -> tuple[str, ...]:
-    """Topic names from a list, or from one (comma-separated) string."""
+    """Topic names from a list (of names or ``{"topicName": …}`` records), or one comma-separated string."""
     if isinstance(value, str):
         value = value.split(",")
     if not isinstance(value, (list, tuple)):
         return ()
-    return tuple(topic.strip() for topic in value if isinstance(topic, str) and topic.strip())
+    names = (item.get("topicName") if isinstance(item, dict) else item for item in value)
+    return tuple(name.strip() for name in names if isinstance(name, str) and name.strip())
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,11 @@ class BrokerInfo:
     @classmethod
     def from_data(cls, data: dict) -> BrokerInfo:
         """Read broker details. An explicit scheme decides the transport; without
-        one, only the standard TLS port 8883 implies TLS."""
+        one, only the standard TLS port 8883 implies TLS. The app's alternative
+        names (connectHost, connectPort, topicList) are accepted too."""
+        data = {**data, "host": data.get("host") or data.get("connectHost"),
+                "port": data.get("port") or data.get("connectPort"),
+                "topics": data.get("topics") or data.get("topicList")}
         host = str(data.get("host") or "")
         tls: bool | None = None
         schemes = (("tcp://", False), ("mqtt://", False), ("ssl://", True), ("mqtts://", True), ("tls://", True))
@@ -97,6 +102,7 @@ class PushResult:
     session_id: str | None = None
     vin: str | None = None
     update_time_ms: int | None = None
+    reason: str | None = None       # this library's explanation of a known refusal code
 
 
 def _clean(value: Any, limit: int = 120) -> str | None:
@@ -158,6 +164,7 @@ def interpret(payload: bytes) -> PushResult:
         session_id=normalize_id(ident.get("sessionId")),
         vin=normalize_id(ident.get("vin")),
         update_time_ms=_millis(upd),
+        reason=result_reason(normalize_id(code)) if ok is False else None,
     )
 
 

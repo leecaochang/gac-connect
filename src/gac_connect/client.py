@@ -72,6 +72,7 @@ from .errors import (
     RegionError,
     ResponseError,
     TokenInvalidError,
+    result_reason,
 )
 from .keys import Material, load_material
 from .limits import DEFAULT_LIMITER, Limiter, parse_retry_after
@@ -518,8 +519,8 @@ class GacClient:
         """Broker details for the command-result feed (short-lived password)."""
         resp = await self._iov_read("/mqtt/info", {})
         data = self._data(resp)
-        if not isinstance(data, dict) or not data.get("host"):
-            raise CommandError(f"push channel details unavailable: {_msg(resp)}")
+        if not isinstance(data, dict) or not (data.get("host") or data.get("connectHost")):
+            raise ResponseError(f"push channel details unavailable: {_msg(resp)}")
         return data
 
     def decrypt_push(self, envelope: dict) -> Any:
@@ -699,7 +700,9 @@ def _command_result(resp: Any) -> Any:
         if (resp.get("success") is True or text == str(CODE_COMMAND_ACCEPTED)
                 or (text in SUCCESS_RESULT_CODES and resp.get("success") is not False)):
             return resp
-        raise CommandError(f"command rejected: {_msg(resp)}", code=code)
+        reason = result_reason(code)
+        detail = f"{reason} (code {code})" if reason else _msg(resp)
+        raise CommandError(f"command rejected: {detail}", code=code)
     raise CommandError("command response must be an object with an acceptance result")
 
 

@@ -310,6 +310,14 @@ def test_push_helpers():
     assert interpret(b'{"code": null, "resultCode": "0000"}').ok is True
     assert interpret(b'{"code": null, "resultCode": null, "status": "fail"}').ok is False
     assert interpret(b'{"code": 13002}').ok is False
+    assert interpret(b'{"code": 13002}').reason == "not supported by this vehicle"
+    for code in (b"13003", b'"13008"', b"13903", b"15001", b"15016", b"15045", b'"11018"'):
+        assert interpret(b'{"code": ' + code + b"}").ok is False
+    assert interpret(b'{"code": 13007}').ok is None and interpret(b'{"code": 13007}').reason is None
+    assert interpret(b'{"code": 0}').reason is None
+    app = BrokerInfo.from_data({"connectHost": "ssl://b.example", "connectPort": 8884, "clientId": "c",
+                                "topicList": [{"topicName": "acct/1", "topicBizCode": 1}, {"topicBizCode": 2}, "x/2"]})
+    assert (app.host, app.port, app.tls, app.topics) == ("b.example", 8884, True, ("acct/1", "x/2"))
     for code in (b'"1000"', b"2000", b'"13000"'):
         assert interpret(b'{"code": ' + code + b"}").ok is True
 

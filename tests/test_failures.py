@@ -318,3 +318,39 @@ def test_explicit_failures_and_unknown_codes_are_rejections(body):
 
     with pytest.raises(CommandError):
         _command_result(body)
+
+
+@pytest.mark.parametrize("code,reason", [(13903, "not powered on"), ("13002", "not supported"),
+                                         (15042, "not in Park"), (13007, None), ("SDK.GATE.0017", None)])
+def test_known_refusal_codes_are_explained_without_the_api_message(code, reason):
+    from gac_connect.client import _command_result
+    from gac_connect.errors import CommandError
+
+    with pytest.raises(CommandError) as caught:
+        _command_result({"code": code, "msg": "private response message"})
+    if reason:
+        assert reason in caught.value.reason and reason in str(caught.value)
+        assert "private response message" not in str(caught.value)
+    else:
+        assert caught.value.reason is None
+
+
+def test_push_details_accept_the_app_connection_names():
+    client, _, _ = make_client(Response(body={"code": "0000", "data": {"connectHost": "ssl://b", "topicList": ["t"]}}),
+                               valid=True)
+
+    async def run():
+        await client.load()
+        return await client.mqtt_info()
+    assert asyncio.run(run())["connectHost"] == "ssl://b"
+
+
+def test_missing_push_details_are_a_response_error():
+    from gac_connect.errors import ResponseError
+    client, _, _ = make_client(Response(body={"code": "0000", "data": {}}), valid=True)
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError):
+            await client.mqtt_info()
+    asyncio.run(run())

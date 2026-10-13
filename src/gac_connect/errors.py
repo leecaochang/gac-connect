@@ -48,6 +48,43 @@ class RepeatRequestError(GacError):
     """The gateway rejected a duplicate request; retry with a fresh request id."""
 
 
+# Command result codes named by the GAC 2.0.32 app (wording is this library's own).
+# 13000 executed and 13001 executing are successes; 13007 (partial success) is left unnamed.
+RESULT_REASONS: dict[str, str] = {
+    "11018": "the remote-control PIN is incorrect",
+    "13002": "not supported by this vehicle",
+    "13003": "not allowed in the vehicle's current state",
+    "13004": "a previous command is still in progress",
+    "13005": "the vehicle's conditions for this command are not met",
+    "13006": "the vehicle's conditions for this command are not met",
+    "13008": "the vehicle is offline",
+    "13101": "the command is invalid",
+    "13404": "the departure plan could not be configured",
+    "13414": "a matching schedule already exists",
+    "13426": "too many schedules (the vehicle allows 7)",
+    "13902": "the vehicle did not respond in time",
+    "13903": "the vehicle is not powered on",
+    "13904": "the vehicle could not be reached",
+    "13905": "the vehicle's voltage is abnormal",
+    "13906": "the command is invalid",
+    "13907": "it already exists",
+    "15001": "another command is executing",
+    "15024": "the vehicle is not stationary",
+    "15030": "a door or the tailgate is open",
+    "15033": "the hazard lights are on",
+    "15034": "a window is open",
+    "15042": "the vehicle is not in Park",
+    "15043": "the fridge door is open",
+}
+# 15016–15045 are detailed refusals in the app, named above where known.
+REFUSAL_CODES = frozenset({*RESULT_REASONS, "13102", "13103", *(str(code) for code in range(15016, 15046))})
+
+
+def result_reason(code: object) -> str | None:
+    """A short explanation for a known command result code, else None."""
+    return RESULT_REASONS.get(str(code)) if type(code) in (int, str) else None
+
+
 class CommandError(GacError):
     """A vehicle command was rejected or malformed."""
 
@@ -56,6 +93,7 @@ class CommandError(GacError):
         # Diagnostics may retain this bounded service code, never the API message.
         value = str(code) if type(code) in (int, str) else ""
         self.code = value if re.fullmatch(r"(?:[0-9]{1,8}|SDK\.[A-Z]{1,12}\.[0-9]{1,8})", value) else None
+        self.reason = result_reason(self.code)
 
 
 class PinRequiredError(CommandError):
