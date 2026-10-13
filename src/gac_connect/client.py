@@ -202,7 +202,9 @@ class GacClient:
                     if 300 <= resp.status < 400:
                         raise ResponseError(f"unexpected redirect ({resp.status}) from {path}; not followed")
                     if resp.status >= 400:
-                        code = self._error_code(host, await resp.read())
+                        body = self._error_body(host, await resp.read())
+                        _LOGGER.debug("HTTP %s from %s: %s", resp.status, path, _excerpt(body))
+                        code = _safe_result_code(body.get("code")) if isinstance(body, dict) else None
                         detail = f" (result code {code})" if code else ""
                         raise ResponseError(f"HTTP {resp.status} from {path}{detail}")
                     raw = await resp.read()
@@ -218,15 +220,16 @@ class GacClient:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ResponseError("Could not reach GAC") from err
 
-    def _error_code(self, host: str, raw: bytes) -> str | None:
-        """A bounded result code from an HTTP error body, never its message."""
+    def _error_body(self, host: str, raw: bytes) -> Any:
+        """An HTTP error reply: decoded (and decrypted) JSON, or its text."""
+        raw = raw[:65536]
         try:
-            body = _loads(raw[:65536])
+            body = _loads(raw)
         except ValueError:
-            return None
+            return raw.decode("utf-8", errors="replace")
         if isinstance(body, dict) and body.get("encryptData"):
-            body = decrypt_envelope(body, self._response_key(host))
-        return _safe_result_code(body.get("code")) if isinstance(body, dict) else None
+            body = decrypt_envelope(body, self._response_key(host)) or body
+        return body
 
     def _response_key(self, host: str):
         return (self._m.main if host == self._cfg["main"] else self._m.iov_response or self._m.iov).private
@@ -732,6 +735,14 @@ def _safe_result_code(value: Any) -> str | None:
         return None
     code = str(value)
     return code if re.fullmatch(r"(?:[0-9]{1,8}|[A-Z]{1,12}(?:\.[A-Z]{1,12})?\.[0-9]{1,8})", code) else None
+
+
+def _excerpt(body: Any, limit: int = 400) -> str:
+    """A short, printable debug excerpt of an error reply, with VIN-like values masked."""
+    import json
+    text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str)
+    text = "".join(ch for ch in text if ch.isprintable())
+    return re.sub(r"\b[A-HJ-NPR-Z0-9]{17}\b", "<VIN>", text)[:limit]
 
 
 def _dumps(obj: Any) -> bytes:

@@ -393,3 +393,19 @@ def test_invalid_hatch_items_are_ignored_rather_than_unknown():
     assert VehicleStatus.from_results({"hatchAccessors": hatches}).hatch_open is False
     hatches[0]["openMode"] = 1
     assert VehicleStatus.from_results({"hatchAccessors": hatches}).hatch_open is True
+
+
+def test_http_error_replies_are_logged_as_a_bounded_masked_excerpt(caplog):
+    import logging
+    client, _, _ = make_client(Response(status=400, body={"code": "400", "msg": "startTime invalid for LGXCE4CB0SA000001",
+                                                          "pad": "x" * 2000}), valid=True)
+    caplog.set_level(logging.DEBUG, logger="gac_connect.client")
+
+    async def run():
+        await client.load()
+        with pytest.raises(GacError):
+            await client.charge_now("VIN")
+    asyncio.run(run())
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("HTTP 400"))
+    assert "startTime invalid for <VIN>" in line and "LGXCE4CB0SA000001" not in line
+    assert len(line.split(": ", 1)[1]) == 400
