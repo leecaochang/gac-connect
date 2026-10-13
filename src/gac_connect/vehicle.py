@@ -2,15 +2,19 @@
 
 The gateway has no plain "start" / "stop"; charging is gated through the schedule:
 
-* **charge now** — mode 0 (free): charge whenever plugged in. The last reported
-  window is resent unchanged, so the owner's schedule survives. The command
-  returns immediately; the car applies it asynchronously and resuming can take
-  several minutes.
-* **resume schedule** — the last reported scheduled mode with the last reported
-  window, resent unchanged.
+* **charge now** — ``{"chargingMode": 0}`` alone (free: charge whenever plugged
+  in). The car keeps its saved window. The command returns immediately; the car
+  applies it asynchronously and resuming can take several minutes.
+* **resume schedule** — the last reported window, scheduled again.
 * **pause** — unavailable until a continuous stop operation is verified.
 * **set window** — mode 2 (the app's "loop") repeating on the selected days, or
   mode 1 (the app's "once") for the next occurrence only.
+
+Gateway rules verified on an Aion UT (2026-10-13): mode 0 with any schedule field
+is refused with HTTP 400; a scheduled request without real dated
+``startTime``/``stopTime`` is refused with HTTP 400; loop mode is accepted with or
+without days; once mode (with or without days) and ``chargingEndType`` 1 are
+refused with 13101, so their app request format is still unknown.
 
 Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64; 0 = every day).
 """
@@ -69,9 +73,14 @@ def reservation_body(vin: str, operation: dict) -> dict:
 
 
 def charge_now_operation(*, until_soc: bool = False) -> dict:
-    """Free charging with placeholder clock values, for a car whose window is unknown."""
-    return _operation(_ms_of_day(6, 0), _ms_of_day(8, 0), 0, MODE_FREE,
-                      END_AT_SOC if until_soc else END_AT_TIME)
+    """Free charging: the mode alone, as the gateway requires; the car keeps its saved window.
+
+    ``until_soc`` adds ``chargingEndType`` 1, which has not been verified with free charging.
+    """
+    op: dict = {"chargingMode": MODE_FREE}
+    if until_soc:
+        op["chargingEndType"] = END_AT_SOC
+    return op
 
 
 _STRUCT_KEYS = ("year", "month", "day", "hour", "minute", "second", "millisecond")
@@ -137,20 +146,20 @@ def reported_window(charging: object) -> dict | None:
 
 def preserved_operation(window: dict, mode: int, *, until_soc: bool | None = None,
                         tz: ZoneInfo | None = None, now: datetime | None = None) -> dict:
-    """Change only the charging mode (and optionally the stopping rule) of a reported window.
+    """Schedule a reported window again in ``mode`` (optionally changing the stopping rule).
 
-    The daily times and days are resent as the car reported them, so switching to
-    free charging and back keeps the owner's schedule instead of overwriting it.
-    Free charging carries only dated calendar fields the car reported. A scheduled
-    mode needs dated fields, so for milliseconds-of-day windows they are rebuilt
-    for the next selected occurrence in ``tz``.
+    The daily times and days are resent as the car reported them. The gateway
+    refuses a scheduled request without real dated calendar fields (HTTP 400), so
+    for milliseconds-of-day windows they are dated for the next occurrence in
+    ``tz`` (on a selected day, except in once mode); a timestamp window keeps the
+    dated fields it reported.
     """
     start, stop = window["dailyReservationStartTime"], window["dailyReservationStopTime"]
     weekly = window["weeklyReservation"]
     structs = window.get("startTime"), window.get("stopTime")
-    if mode != MODE_FREE and tz is not None and start < 86_400_000 and stop < 86_400_000:
+    if tz is not None and start < 86_400_000 and stop < 86_400_000:
         begin, end = _next_window(start // 3_600_000, start // 60_000 % 60, stop // 3_600_000, stop // 60_000 % 60,
-                                  tz, weekly if mode == MODE_LOOP else 0, now)
+                                  tz, 0 if mode == MODE_SCHEDULED else weekly, now)
         structs = _struct(begin), _struct(end)
     end_type = window["chargingEndType"] if until_soc is None else END_AT_SOC if until_soc else END_AT_TIME
     return _operation(start, stop, weekly, mode, end_type, start_struct=structs[0], stop_struct=structs[1])

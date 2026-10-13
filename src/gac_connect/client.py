@@ -647,28 +647,23 @@ class GacClient:
         return await self.command(vin, "unlock")
 
     async def charge_now(self, vin: str, *, until_soc: bool = False) -> Any:
-        """Allow charging whenever plugged in, keeping the last reported window for later.
-
-        Before any usable report the legacy placeholder window is sent instead.
-        """
-        window = self._charge_windows.get(vin)
-        op = (vehicle.preserved_operation(window, vehicle.MODE_FREE, until_soc=until_soc) if window
-              else vehicle.charge_now_operation(until_soc=until_soc))
-        return await self._reservation(vin, op)
+        """Allow charging whenever plugged in; the car keeps its saved window for a later resume."""
+        return await self._reservation(vin, vehicle.charge_now_operation(until_soc=until_soc))
 
     async def resume_schedule(self, vin: str, *, until_soc: bool | None = None) -> Any:
         """Return to scheduled charging with the window the car last reported.
 
         This is not a continuous pause: the car charges inside that window. The
-        last reported scheduled mode (once or loop) and stopping rule are kept,
-        unless ``until_soc`` is given; with no scheduled report seen, "once" is
-        used, like set_charge_window. Raises CommandError, without sending,
-        before any status read has reported a usable window.
+        last reported scheduled mode and stopping rule are kept, unless
+        ``until_soc`` is given; with no scheduled report seen (for example the
+        schedule was switched off before this client started), loop mode is
+        used. Raises CommandError, without sending, before any status read has
+        reported a usable window.
         """
         window = self._charge_windows.get(vin)
         if window is None:
             raise CommandError("no reported charge window to resume; read the status or set a charge window")
-        mode = window.get("chargingMode", vehicle.MODE_SCHEDULED)
+        mode = window.get("chargingMode", vehicle.MODE_LOOP)
         return await self._reservation(vin, vehicle.preserved_operation(window, mode, until_soc=until_soc,
                                                                         tz=self._zone()))
 

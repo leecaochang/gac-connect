@@ -33,28 +33,26 @@ def _sent(client):
     return body["operations"][0]
 
 
-@pytest.mark.parametrize("report", [TIME_OF_DAY, TIMESTAMP])
+@pytest.mark.parametrize("report", [None, TIME_OF_DAY, TIMESTAMP])
 @pytest.mark.parametrize("until_soc", [False, True])
-def test_charge_now_resends_the_reported_window_in_free_mode(report, until_soc):
+def test_charge_now_sends_only_the_mode_and_the_car_keeps_its_window(report, until_soc):
+    """An Aion UT refuses free mode with any schedule field (HTTP 400) and accepts the mode alone."""
     client, _ = _client(report)
 
     async def run():
         await client.load()
-        await client.get_status("VIN")
+        if report:
+            await client.get_status("VIN")
         client._iov_call = AsyncMock(return_value=ACCEPTED)
         await client.charge_now("VIN", until_soc=until_soc)
 
     asyncio.run(run())
-    expected = {key: report[key] for key in ("dailyReservationStartTime", "dailyReservationStopTime",
-                                             "weeklyReservation", "startTime", "stopTime") if key in report}
-    assert _sent(client) == {**expected, "chargingMode": 0, "chargingEndType": int(until_soc)}
+    assert _sent(client) == ({"chargingMode": 0, "chargingEndType": 1} if until_soc else {"chargingMode": 0})
 
 
-def test_charge_now_before_any_report_keeps_the_legacy_request():
-    client, _ = _client()
-    client._iov_call = AsyncMock(return_value=ACCEPTED)
-    asyncio.run(client.charge_now("VIN"))
-    assert _sent(client) == vehicle.charge_now_operation()
+def _when(struct):
+    from datetime import datetime
+    return datetime(*(struct[key] for key in ("year", "month", "day", "hour", "minute")))
 
 
 @pytest.mark.parametrize("report", [TIME_OF_DAY, TIMESTAMP])
@@ -69,7 +67,7 @@ def test_resume_resends_the_reported_window_and_stopping_rule_in_scheduled_mode(
 
     asyncio.run(run())
     op = _sent(client)
-    assert op["chargingMode"] == 1 and op["chargingEndType"] == report["chargingEndType"]
+    assert op["chargingMode"] == 2 and op["chargingEndType"] == report["chargingEndType"]
     assert op["dailyReservationStartTime"] == report["dailyReservationStartTime"]
     if "startTime" in report:       # a dated timestamp window is resent as reported
         assert op["startTime"] == report["startTime"]
@@ -137,7 +135,7 @@ def test_resume_keeps_the_last_reported_loop_mode_after_free_charging():
     assert _sent(client)["chargingMode"] == 2
 
 
-def test_resume_without_a_scheduled_report_uses_once_like_set_charge_window():
+def test_resume_without_a_scheduled_report_uses_loop_mode():
     client, _ = _client({**TIME_OF_DAY, "chargingMode": 0})
 
     async def run():
@@ -147,7 +145,7 @@ def test_resume_without_a_scheduled_report_uses_once_like_set_charge_window():
         await client.resume_schedule("VIN")
 
     asyncio.run(run())
-    assert _sent(client)["chargingMode"] == 1
+    assert _sent(client)["chargingMode"] == 2
 
 
 # An Aion UT's report of an app-made Sat+Sun 22:08–22:10 repeating window (2026-10-13).
@@ -155,20 +153,6 @@ UT_LOOP = {"dailyReservationStartTime": 79680000, "dailyReservationStopTime": 79
            "chargingMode": 2, "chargingEndType": 0, "reservationChargingFlag": 1,
            "startTime": {"month": 0, "hour": 22, "year": 2000, "millisecond": 0, "day": 0, "minute": 8, "second": 0},
            "stopTime": {"month": 0, "hour": 22, "year": 2000, "millisecond": 0, "day": 0, "minute": 10, "second": 0}}
-
-
-def test_ut_app_window_charge_now_drops_the_undated_fields_the_gateway_rejects():
-    client, _ = _client(UT_LOOP)
-
-    async def run():
-        await client.load()
-        await client.get_status("VIN")
-        client._iov_call = AsyncMock(return_value=ACCEPTED)
-        await client.charge_now("VIN")
-
-    asyncio.run(run())
-    assert _sent(client) == {"dailyReservationStartTime": 79680000, "dailyReservationStopTime": 79800000,
-                             "weeklyReservation": 96, "chargingMode": 0, "chargingEndType": 0}
 
 
 def test_ut_app_window_resumes_in_loop_mode_dated_for_the_next_weekend_day():
