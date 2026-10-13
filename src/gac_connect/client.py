@@ -148,6 +148,7 @@ class GacClient:
         self._auth_dead = False      # a refresh failed for good; only a new session clears it
         self._dead_refresh: str | None = None
         self._charge_time_formats: dict[str, str] = {}
+        self._charge_windows: dict[str, dict] = {}   # last usable reported reservation, per VIN
 
     def _zone(self) -> ZoneInfo:
         """The zone charge windows are scheduled in, loaded the first time one is.
@@ -459,6 +460,9 @@ class GacClient:
         status = VehicleStatus.from_results(reports[0], online=data.get("online"), updated_ms=data.get("updateTime"))
         if status.charge_time_format is not None:
             self._charge_time_formats[vin] = status.charge_time_format
+        charging = reports[0].get("chargingAccessors")
+        if (window := vehicle.reported_window(charging[0] if isinstance(charging, list) and charging else None)):
+            self._charge_windows[vin] = window
         return status
 
     async def get_position(self, vin: str) -> dict:
@@ -624,7 +628,27 @@ class GacClient:
         return await self.command(vin, "unlock")
 
     async def charge_now(self, vin: str, *, until_soc: bool = False) -> Any:
-        return await self._reservation(vin, vehicle.charge_now_operation(until_soc=until_soc))
+        """Allow charging whenever plugged in, keeping the last reported window for later.
+
+        Before any usable report the legacy placeholder window is sent instead.
+        """
+        window = self._charge_windows.get(vin)
+        op = (vehicle.preserved_operation(window, vehicle.MODE_FREE, until_soc=until_soc) if window
+              else vehicle.charge_now_operation(until_soc=until_soc))
+        return await self._reservation(vin, op)
+
+    async def resume_schedule(self, vin: str, *, until_soc: bool | None = None) -> Any:
+        """Return to scheduled charging with the window the car last reported.
+
+        This is not a continuous pause: the car charges inside that window. The
+        stopping rule is kept unless ``until_soc`` is given. Raises CommandError,
+        without sending, before any status read has reported a usable window.
+        """
+        window = self._charge_windows.get(vin)
+        if window is None:
+            raise CommandError("no reported charge window to resume; read the status or set a charge window")
+        return await self._reservation(vin, vehicle.preserved_operation(window, vehicle.MODE_SCHEDULED,
+                                                                        until_soc=until_soc))
 
     async def charge_pause(self, vin: str) -> Any:
         """Unavailable: scheduling a daily window is not a continuous pause."""

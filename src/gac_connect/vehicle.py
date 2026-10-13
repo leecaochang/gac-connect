@@ -2,9 +2,11 @@
 
 The gateway has no plain "start" / "stop"; charging is gated through the schedule:
 
-* **charge now** — mode 0 (free): charge whenever plugged in. The command
+* **charge now** — mode 0 (free): charge whenever plugged in. The last reported
+  window is resent unchanged, so the owner's schedule survives. The command
   returns immediately; the car applies it asynchronously and resuming can take
   several minutes.
+* **resume schedule** — mode 1 with the last reported window, resent unchanged.
 * **pause** — unavailable until a continuous stop operation is verified.
 * **set window** — mode 1 with a real daily window.
 
@@ -61,8 +63,54 @@ def reservation_body(vin: str, operation: dict) -> dict:
 
 
 def charge_now_operation(*, until_soc: bool = False) -> dict:
+    """Free charging with placeholder clock values, for a car whose window is unknown."""
     return _operation(_ms_of_day(6, 0), _ms_of_day(8, 0), 0, MODE_FREE,
                       END_AT_SOC if until_soc else END_AT_TIME)
+
+
+_STRUCT_KEYS = ("year", "month", "day", "hour", "minute", "second", "millisecond")
+
+
+def _exact(value: object) -> int | None:
+    if type(value) is int:
+        return value
+    return int(value) if type(value) is float and value.is_integer() else None
+
+
+def reported_window(charging: object) -> dict | None:
+    """The reservation window fields of a ``chargingAccessors`` report, or None.
+
+    Both daily times must be usable milliseconds-of-day or Unix-ms values, as the
+    car reported them. Calendar structs are kept only when every part is integral.
+    """
+    if not isinstance(charging, dict):
+        return None
+    start, stop = (_exact(charging.get(key)) for key in ("dailyReservationStartTime", "dailyReservationStopTime"))
+    if start is None or stop is None or not 0 <= start < 253402300800000 or not 0 <= stop < 253402300800000:
+        return None
+    weekly = _exact(charging.get("weeklyReservation"))
+    end_type = _exact(charging.get("chargingEndType"))
+    window = {"dailyReservationStartTime": start, "dailyReservationStopTime": stop,
+              "weeklyReservation": weekly if weekly is not None and 0 <= weekly <= 127 else 0,
+              "chargingEndType": end_type if end_type in (END_AT_TIME, END_AT_SOC) else END_AT_TIME}
+    for key in ("startTime", "stopTime"):
+        struct = charging.get(key)
+        parts = {name: _exact(struct.get(name)) for name in _STRUCT_KEYS} if isinstance(struct, dict) else None
+        if parts and all(parts[name] is not None for name in _STRUCT_KEYS[:5]):
+            window[key] = {name: part if part is not None else 0 for name, part in parts.items()}
+    return window
+
+
+def preserved_operation(window: dict, mode: int, *, until_soc: bool | None = None) -> dict:
+    """Change only the charging mode (and optionally the stopping rule) of a reported window.
+
+    The window is resent exactly as the car reported it, so switching to free
+    charging and back keeps the owner's schedule instead of overwriting it.
+    """
+    end_type = window["chargingEndType"] if until_soc is None else END_AT_SOC if until_soc else END_AT_TIME
+    return _operation(window["dailyReservationStartTime"], window["dailyReservationStopTime"],
+                      window["weeklyReservation"], mode, end_type,
+                      start_struct=window.get("startTime"), stop_struct=window.get("stopTime"))
 
 
 def pause_operation(tz: ZoneInfo) -> dict:
