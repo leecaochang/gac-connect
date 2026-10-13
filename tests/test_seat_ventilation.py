@@ -55,3 +55,28 @@ def test_rejected_seat_request_is_not_replayed():
     asyncio.run(run())
     client._iov_call.assert_awaited_once()
     http.post.assert_not_called()
+
+
+@pytest.mark.parametrize("level,command,extra", [(0, "seat-1-ventilation-off", {}),
+                                                 (2, "seat-1-ventilation-on", {"windStrength": 2}),
+                                                 (3, "seat-1-ventilation-on", {"windStrength": 3})])
+def test_seat_ventilation_levels(level, command, extra):
+    from unittest.mock import Mock
+
+    from gac_connect.client import GacClient
+    client = GacClient("TH", Mock())
+    client.command = AsyncMock(return_value={"code": 13001})
+    asyncio.run(client.set_seat_ventilation_level("VIN", 1, level))
+    client.command.assert_awaited_once_with("VIN", command, **extra)
+
+
+@pytest.mark.parametrize("seat,level", [(1, 4), (1, -1), (1, True), (5, 1), (1, 1.0)])
+def test_invalid_seat_levels_never_send(seat, level):
+    from unittest.mock import Mock
+
+    from gac_connect.client import GacClient
+    client = GacClient("TH", Mock())
+    client.command = AsyncMock()
+    with pytest.raises(ValueError):
+        asyncio.run(client.set_seat_ventilation_level("VIN", seat, level))
+    client.command.assert_not_awaited()

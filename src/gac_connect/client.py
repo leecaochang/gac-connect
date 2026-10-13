@@ -578,11 +578,13 @@ class GacClient:
 
     async def climate_manual_on(
         self, vin: str, *, temperature: float = 24.0, minutes: int = 30,
-        fan_speed: int | None = None, blowing_mode: int | None = None,
+        fan_speed: int | None = None, blowing_mode: int | None = None, cycling_mode: int | None = None,
     ) -> Any:
-        """Start manual A/C, optionally selecting the blower or outlet code.
+        """Start manual A/C, optionally selecting the blower, outlet or air-source code.
 
-        Omitted fan_speed/blowing_mode fields preserve the vehicle's settings.
+        Omitted fan_speed/blowing_mode/cycling_mode fields preserve the vehicle's settings.
+        Air source (cyclingMode) 1 recirculates and 2 draws fresh air on an Aion UT,
+        which applies it only while its A/C is already running.
         A selection starts or renews the timed run at the supplied temperature.
         Fan speed uses 1–10; outlet codes must be calibrated for the vehicle.
         Manual startup and fan writes were verified on an Aion UT. Outlet codes
@@ -595,6 +597,8 @@ class GacClient:
             params["windStrength"] = commands.validate_fan_speed(fan_speed)
         if blowing_mode is not None:
             params["blowingMode"] = commands.validate_blowing_mode(blowing_mode)
+        if cycling_mode is not None:
+            params["cyclingMode"] = commands.validate_cycling_mode(cycling_mode)
         return await self.command(vin, "aircon-manual-on", **params)
 
     async def climate_off(self, vin: str) -> Any:
@@ -622,6 +626,15 @@ class GacClient:
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be a boolean")
         return await self.command(vin, f"seat-{seat}-ventilation-{'on' if enabled else 'off'}")
+
+    async def set_seat_ventilation_level(self, vin: str, seat: int, level: int) -> Any:
+        """Set ventilation strength 1–3, or 0 for off (verified on an Aion UT's front seats)."""
+        if type(seat) is not int or seat not in (1, 2, 3, 4):
+            raise ValueError("seat must be an integer from 1 to 4")
+        level = commands.validate_seat_level(level)
+        if level == 0:
+            return await self.command(vin, f"seat-{seat}-ventilation-off")
+        return await self.command(vin, f"seat-{seat}-ventilation-on", windStrength=level)
 
     async def fridge_on(self, vin: str, *, mode: str = "refrigerate", temperature: float | None = None) -> Any:
         """Ask the car to run the fridge in ``mode`` ("refrigerate", "heat" or "freeze") at ``temperature`` °C.

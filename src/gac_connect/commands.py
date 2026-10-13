@@ -95,9 +95,10 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
             description="release charging gun / stop charging (PIN)"),
     Command("battery-precondition", _p("battery/pretreatment"), "ops", category="charge",
             description="battery preconditioning", ops={"batteryPretreatmentMode": 1}),
-    # The app's pretreatment modes: 0 cancel, 1 immediately, 2 once, 3 loop.
+    # The app's pretreatment modes: 0 cancel, 1 immediately, 2 once, 3 loop. An Aion UT
+    # accepted both requests and reported the mode back.
     Command("battery-precondition-off", _p("battery/pretreatment"), "ops", category="charge",
-            description="cancel battery preconditioning (unverified)", ops={"batteryPretreatmentMode": 0}),
+            description="cancel battery preconditioning", ops={"batteryPretreatmentMode": 0}),
     Command("power-on", _p("engine/start"), "flat", pin=True, category="power", description="remote power on (PIN)"),
     Command("power-off", _p("engine/stop"), "flat", pin=True, category="power", description="remote power off (PIN)"),
     # The app's vehicle-shutdown branch is separate from its engine start/stop commands.
@@ -163,6 +164,27 @@ def validate_blowing_mode(mode: Any) -> int:
     return mode
 
 
+# Verified on an Aion UT: applied only while its A/C already runs; 3 is accepted
+# without visible effect, and the console's Auto air source reports as 2.
+CYCLING_RECIRCULATE, CYCLING_FRESH_AIR = 1, 2
+
+
+def validate_cycling_mode(mode: Any) -> int:
+    """Accept a positive raw air-source code: 1 recirculate and 2 fresh air on an Aion UT."""
+    if type(mode) is not int or mode <= 0:
+        raise ValueError("cycling mode must be a positive integer air-source code")
+    return mode
+
+
+SEAT_VENTILATION_LEVELS = range(4)   # 0 off, 1–3 strength, verified on an Aion UT's front seats
+
+
+def validate_seat_level(level: Any) -> int:
+    if type(level) is not int or level not in SEAT_VENTILATION_LEVELS:
+        raise ValueError("seat ventilation level must be an integer from 0 to 3")
+    return level
+
+
 def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) -> dict:
     """Assemble a request body; overrides never replace the vehicle identity.
 
@@ -186,6 +208,8 @@ def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) 
             operation["windStrength"] = validate_fan_speed(operation["windStrength"])
         if cmd.name == "aircon-manual-on" and "blowingMode" in operation:
             operation["blowingMode"] = validate_blowing_mode(operation["blowingMode"])
+        if cmd.name == "aircon-manual-on" and "cyclingMode" in operation:
+            operation["cyclingMode"] = validate_cycling_mode(operation["cyclingMode"])
         identifier = {"vin": vin, "grade": 2}
         if cmd.kind == "air":
             identifier["duration"] = duration

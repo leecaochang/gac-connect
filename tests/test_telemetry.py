@@ -240,3 +240,12 @@ def test_missing_validity_flags_keep_readings():
     status = VehicleStatus.from_results({"chargingAccessors": [{"chargingCurrent": 16}],
                                          "hatchAccessors": [{"openMode": 0}, {"openMode": 0}]})
     assert status.charge_current_a == 16 and status.hatch_open is False
+
+
+@pytest.mark.parametrize("mode,on", [(0, False), (1, True), (2, True), (3, True), (-1, None), (4, None), (None, None)])
+def test_battery_preconditioning_mode_is_decoded(mode, on):
+    status = VehicleStatus.from_results({"batteryPretreatmentAccessors": [
+        {"batteryPretreatmentMode": mode, "batteryPretreatmentStatus": -1}]})
+    assert status.battery_precondition_on is on
+    assert status.battery_precondition_mode == (mode if on is not None else None)
+    assert status.battery_precondition_status is None

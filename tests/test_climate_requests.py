@@ -187,3 +187,27 @@ def test_invalid_outlet_candidate_sends_nothing(mode):
         asyncio.run(client.climate_manual_on("VIN", blowing_mode=mode))
     client._iov_call.assert_not_awaited()
     http.post.assert_not_called()
+
+
+@pytest.mark.parametrize("cycling", [1, 2])
+def test_manual_start_can_select_the_air_source(cycling):
+    client, http, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value=ACCEPTED)
+
+    async def run():
+        await client.load()
+        await client.climate_manual_on("VIN", temperature=24, minutes=5, cycling_mode=cycling)
+
+    asyncio.run(run())
+    body = client._iov_call.await_args.args[1]
+    assert body["operations"] == [{"enableAutoMode": 0, "enableAirCompressor": 1, "temperature": 24.0,
+                                   "temperatureUnit": 0, "cyclingMode": cycling}]
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.0, "1"])
+def test_invalid_air_source_never_sends(value):
+    client, http, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value=ACCEPTED)
+    with pytest.raises(ValueError):
+        asyncio.run(client.climate_manual_on("VIN", cycling_mode=value))
+    client._iov_call.assert_not_called()

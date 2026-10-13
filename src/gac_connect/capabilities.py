@@ -30,7 +30,7 @@ class Capability:
 READINGS = frozenset({
     "power_on",
     "soc", "range_km", "odometer_km", "cabin_temp_c", "aux_voltage", "pm25",
-    "outside_temp_c", "ac_fan_strength", "ac_auto_on", "ac_compressor_on", "anti_theft_on",
+    "outside_temp_c", "ac_fan_strength", "ac_auto_on", "ac_compressor_on", "anti_theft_on", "battery_precondition_mode",
     "charge_current_a", "charge_voltage_v", "charge_power_kw", "estimated_charge_minutes",
     "charge_window_start", "charge_window_stop", "charge_weekly", "charging_mode", "updated_ms",
     "plugged_in", "charging", "locked", "door_open", "window_open", "hatch_open", "online",
@@ -51,7 +51,7 @@ EQUIPMENT_READINGS = {
                        "charging", "plugged_in"),
     "lights": ("lights_on",),
     "location": ("latitude", "longitude"),
-    "ventilation": (), "horn": (), "battery_precondition": (), "sterilisation": (),
+    "ventilation": (), "horn": (), "battery_precondition": ("battery_precondition_mode",), "sterilisation": (),
     # A power reading does not establish that shutdown is remotely supported.
     "vehicle_power_control": (),
     # Placeholder off reports do not establish that a seat can be controlled.

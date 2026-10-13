@@ -238,6 +238,10 @@ class VehicleStatus:
     anti_theft_on: bool | None = None
     steering_heat_on: bool | None = None
     lights_on: bool | None = None
+    # batteryPretreatmentMode: 0 off, 1 immediately, 2 once, 3 repeating (the app's names)
+    battery_precondition_mode: int | None = None
+    battery_precondition_on: bool | None = None
+    battery_precondition_status: int | None = None
     # fridge / warmer box: None when the car does not report one
     fridge_fitted: bool = False
     fridge_mode: str | None = None           # "off" | "refrigerate" | "heat" | "freeze"
@@ -285,6 +289,10 @@ class VehicleStatus:
         light = _first(results, "lightAccessors")
         theft = _first(results, "antiTheftAccessors")
         vehicle_power = _exact_int(_first(results, "powerAccessors").get("powerMode"))
+        pretreatment = _first(results, "batteryPretreatmentAccessors")
+        precondition = _exact_int(pretreatment.get("batteryPretreatmentMode"))
+        precondition = precondition if precondition in (0, 1, 2, 3) else None
+        precondition_status = _exact_int(pretreatment.get("batteryPretreatmentStatus"))
         fridge = _first(results, "refrigeratorAccessors")
         keep_mode = cls._FRIDGE_KEEP.get(_exact_int(fridge.get("leavingVehicleStatus")))
         keep_minutes = _exact_int(fridge.get("surplusTime")) if keep_mode == "timed" else None
@@ -434,6 +442,10 @@ class VehicleStatus:
             ac_cycling_mode=_exact_int(air.get("cyclingMode")),
             seats=seats,
             anti_theft_on={0: False, 1: True}.get(_exact_int(theft.get("enable"))),
+            battery_precondition_mode=precondition,
+            battery_precondition_on=None if precondition is None else precondition != 0,
+            battery_precondition_status=precondition_status if precondition_status is not None
+            and precondition_status >= 0 else None,
             steering_heat_on=(steering > 0) if steering is not None else None,
             lights_on=(lights > 0) if lights is not None else None,
             fridge_fitted=bool(fridge),
