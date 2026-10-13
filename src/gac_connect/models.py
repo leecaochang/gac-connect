@@ -5,7 +5,9 @@ lists. This module folds the useful ones into a flat, typed :class:`VehicleStatu
 with the gateway's quirks resolved:
 
 * SoC is reported 0..1, exposed as a percentage;
-* a charging current of 1638.0 is the gateway's "unknown" placeholder → None;
+* a charging current of 1638.0 or more is the gateway's "unknown" placeholder
+  (0x3FFF × 0.1 = 1638.3) → None;
+* an odometer of 0 is a placeholder, not a reading → None;
 * tyre pressure stays in native kPa (let the consumer convert to psi if it wants);
 * lock uses the gateway's inverted polarity (0 = locked), decoded to a bool;
 * openMode 0 = closed, >0 = open, negative = unknown;
@@ -241,7 +243,8 @@ class VehicleStatus:
     power_on: bool | None = None
     power_mode: int | None = None
 
-    # gateway "unknown" placeholder for charge current
+    # gateway "unknown" placeholder for charge current: a saturated 14-bit field
+    # (0x3FFF × 0.1 = 1638.3), so anything from 1638 A up is not a reading
     _CURRENT_UNKNOWN = 1638.0
     # doorAccessors[].lock: 0 = locked, 1 = unlocked, <0 = unknown
     _LOCK_LOCKED = 0
@@ -273,7 +276,7 @@ class VehicleStatus:
 
         soc = _bounded(drv.get("remainElectricityPercentage"), 0, 1)
         cur = _bounded(chg.get("chargingCurrent"), 0)
-        if cur == cls._CURRENT_UNKNOWN:
+        if cur is not None and cur >= cls._CURRENT_UNKNOWN:
             cur = None
         est = _num(chg.get("estimatedChargedDuration"))
         if est is not None and not 0 <= est < _MAX_CHARGE_MINUTES:
@@ -390,7 +393,8 @@ class VehicleStatus:
             estimated_charge_minutes=int(est) if est is not None else None,
             plugged_in={0: False, 1: True}.get(_exact_int(cgr.get("plug"))),
             charger_locked={0: True, 1: False}.get(_exact_int(cgr.get("lock"))),
-            odometer_km=_bounded(drv.get("totalVoyageCourse"), 0),
+            # A real odometer is never 0; a zero placeholder would look like a meter reset.
+            odometer_km=_bounded(drv.get("totalVoyageCourse"), 0) or None,
             cabin_temp_c=_num(env.get("temperatureInsideCar")),
             outside_temp_c=_num(env.get("temperatureOutsideCar")),
             pm25=_bounded(env.get("pm25"), 0),

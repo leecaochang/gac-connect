@@ -196,3 +196,18 @@ def test_raw_seat_enable_code_is_retained_without_guessing_smart_mode(code, expe
     status = VehicleStatus.from_results({'seatTemperatureAccessors': [{'seat': 1, 'enableWind': code, 'windStrength': 1}]})
     assert status.seats[0].ventilation_enable_code == code
     assert status.seats[0].ventilation_on is expected
+
+
+@pytest.mark.parametrize("current,expected", [
+    (1638.0, None), (1638.3, None), (1638.4, None), (6553.5, None), (1637.9, 1637.9), (0, 0), (16.5, 16.5), (-1, None),
+])
+def test_saturated_charge_current_is_unknown_and_never_becomes_power(current, expected):
+    status = VehicleStatus.from_results({"chargingAccessors": [{"chargingCurrent": current, "chargingVoltage": 400}]})
+    assert status.charge_current_a == expected
+    assert status.charge_power_kw == (round(400 * expected / 1000, 2) if expected is not None else None)
+
+
+@pytest.mark.parametrize("value,expected", [(0, None), (0.0, None), ("0", None), (-5, None), (1, 1), (3205.5, 3205.5)])
+def test_zero_odometer_is_a_placeholder(value, expected):
+    status = VehicleStatus.from_results({"drivingOverviewAccessors": [{"totalVoyageCourse": value}]})
+    assert status.odometer_km == expected
