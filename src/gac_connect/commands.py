@@ -61,6 +61,12 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     Command("aircon-temperature", _p("air_condition/open"), "air-adjust", category="climate",
             description="adjust running A/C temperature without requesting Auto",
             ops={"temperature": 24.0, "temperatureUnit": 0}),
+    # GAC 2.0.32 sterilisation (hot-air antivirus) endpoints. The body and the unit of
+    # currentDuration are unverified; capability metadata advertises 60–3600 (seconds).
+    Command("antivirus-on", _p("control_air_condition_antivirus/on"), "anti", category="climate",
+            description="cabin sterilisation on (unverified)"),
+    Command("antivirus-off", _p("control_air_condition_antivirus/off"), "flat", category="climate",
+            description="cabin sterilisation off (unverified)"),
     Command("ventilate-on", _p("ventilate_mode/open"), "flat", stable=True, category="climate",
             description="cabin ventilation on"),
     Command("ventilate-off", _p("ventilate_mode/close"), "flat", category="climate", description="cabin ventilation off"),
@@ -89,6 +95,9 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
             description="release charging gun / stop charging (PIN)"),
     Command("battery-precondition", _p("battery/pretreatment"), "ops", category="charge",
             description="battery preconditioning", ops={"batteryPretreatmentMode": 1}),
+    # The app's pretreatment modes: 0 cancel, 1 immediately, 2 once, 3 loop.
+    Command("battery-precondition-off", _p("battery/pretreatment"), "ops", category="charge",
+            description="cancel battery preconditioning (unverified)", ops={"batteryPretreatmentMode": 0}),
     Command("power-on", _p("engine/start"), "flat", pin=True, category="power", description="remote power on (PIN)"),
     Command("power-off", _p("engine/stop"), "flat", pin=True, category="power", description="remote power off (PIN)"),
     # The app's vehicle-shutdown branch is separate from its engine start/stop commands.

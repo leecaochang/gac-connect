@@ -354,3 +354,18 @@ def test_missing_push_details_are_a_response_error():
         with pytest.raises(ResponseError):
             await client.mqtt_info()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("name,path,body", [
+    ("antivirus-on", "control_air_condition_antivirus/on", {"identifier": {"vin": "VIN"}, "currentDuration": 30}),
+    ("antivirus-off", "control_air_condition_antivirus/off", {"vin": "VIN"}),
+    ("battery-precondition-off", "battery/pretreatment",
+     {"identifier": {"vin": "VIN"}, "operations": [{"batteryPretreatmentMode": 0}]}),
+])
+def test_app_derived_requests_use_the_app_paths(name, path, body):
+    from gac_connect.capabilities import COMMAND_FEATURES, FEATURES
+    from gac_connect.commands import CATALOG, build_body
+    cmd = CATALOG[name]
+    assert cmd.path.endswith("/access_gateway/" + path) and not cmd.pin and not cmd.stable
+    assert build_body(cmd, "VIN") == body
+    assert COMMAND_FEATURES[name] in FEATURES

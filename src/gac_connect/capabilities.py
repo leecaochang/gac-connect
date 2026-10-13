@@ -51,7 +51,7 @@ EQUIPMENT_READINGS = {
                        "charging", "plugged_in"),
     "lights": ("lights_on",),
     "location": ("latitude", "longitude"),
-    "ventilation": (), "horn": (), "battery_precondition": (),
+    "ventilation": (), "horn": (), "battery_precondition": (), "sterilisation": (),
     # A power reading does not establish that shutdown is remotely supported.
     "vehicle_power_control": (),
     # Placeholder off reports do not establish that a seat can be controlled.
@@ -72,6 +72,8 @@ COMMAND_FEATURES = {
     "flash-on": "lights", "flash-off": "lights",
     "ventilate-on": "ventilation", "ventilate-off": "ventilation",
     "horn-on": "horn", "horn-off": "horn", "battery-precondition": "battery_precondition",
+    "battery-precondition-off": "battery_precondition",
+    "antivirus-on": "sterilisation", "antivirus-off": "sterilisation",
     **{f"seat-{i}-ventilation-{direction}": f"seat_{i}_ventilation"
        for i in range(1, 5) for direction in ("on", "off")},
 }
