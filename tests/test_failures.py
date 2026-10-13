@@ -369,3 +369,27 @@ def test_app_derived_requests_use_the_app_paths(name, path, body):
     assert cmd.path.endswith("/access_gateway/" + path) and not cmd.pin and not cmd.stable
     assert build_body(cmd, "VIN") == body
     assert COMMAND_FEATURES[name] in FEATURES
+
+
+@pytest.mark.parametrize("body,detail", [({"code": "SDK.PARAM.0001", "msg": "private"}, "result code SDK.PARAM.0001"),
+                                         ({"msg": "private"}, None), (None, None)])
+def test_http_errors_carry_only_a_bounded_result_code(body, detail):
+    from gac_connect.errors import ResponseError
+    client, _, _ = make_client(Response(status=400, body=body), valid=True)
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError) as caught:
+            await client.lock("VIN")
+        return str(caught.value)
+    message = asyncio.run(run())
+    assert message.startswith("HTTP 400 from ") and "private" not in message
+    assert (detail in message) if detail else "result code" not in message
+
+
+def test_invalid_hatch_items_are_ignored_rather_than_unknown():
+    from gac_connect.models import VehicleStatus
+    hatches = [{"hatch": 1, "openModeFlag": 1, "openMode": 0}, {"hatch": 3, "openModeFlag": 0, "openMode": 0}]
+    assert VehicleStatus.from_results({"hatchAccessors": hatches}).hatch_open is False
+    hatches[0]["openMode"] = 1
+    assert VehicleStatus.from_results({"hatchAccessors": hatches}).hatch_open is True

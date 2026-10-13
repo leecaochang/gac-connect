@@ -77,14 +77,14 @@ def test_client_learns_reservation_format_per_vehicle_without_sending_test_comma
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("weekly,days", [(0, 127), (96, 96), (127, 127), (1, 1)])
-def test_repeating_window_matches_the_apps_loop_report(weekly, days):
-    """An app-made Sat+Sun 22:08–22:10 window is reported exactly like this by an Aion UT."""
-    op = window_operation("22:08", "22:10", ZONE, weekly=weekly, now=datetime(2026, 10, 13, 10, tzinfo=ZONE))
-    undated = {"year": 2000, "month": 0, "day": 0, "second": 0, "millisecond": 0}
+@pytest.mark.parametrize("weekly,days,start_day", [(0, 127, 13), (96, 96, 17), (127, 127, 13), (1, 1, 19)])
+def test_repeating_window_uses_loop_mode_with_dates_for_the_next_selected_day(weekly, days, start_day):
+    """Same daily times and days as an app-made Sat+Sun 22:08–22:10 window; dated, never undated."""
+    op = window_operation("22:08", "22:10", ZONE, weekly=weekly, now=datetime(2026, 10, 13, 10, tzinfo=ZONE))  # Tue
+    dated = {"year": 2026, "month": 10, "day": start_day, "second": 0, "millisecond": 0}
     assert op == {"dailyReservationStartTime": 79680000, "dailyReservationStopTime": 79800000,
                   "weeklyReservation": days, "chargingMode": 2, "chargingEndType": 0,
-                  "startTime": {**undated, "hour": 22, "minute": 8}, "stopTime": {**undated, "hour": 22, "minute": 10}}
+                  "startTime": {**dated, "hour": 22, "minute": 8}, "stopTime": {**dated, "hour": 22, "minute": 10}}
 
 
 def test_one_time_window_uses_once_mode_with_dates():

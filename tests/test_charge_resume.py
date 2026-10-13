@@ -71,7 +71,12 @@ def test_resume_resends_the_reported_window_and_stopping_rule_in_scheduled_mode(
     op = _sent(client)
     assert op["chargingMode"] == 1 and op["chargingEndType"] == report["chargingEndType"]
     assert op["dailyReservationStartTime"] == report["dailyReservationStartTime"]
-    assert op.get("startTime") == report.get("startTime")
+    if "startTime" in report:       # a dated timestamp window is resent as reported
+        assert op["startTime"] == report["startTime"]
+    else:                           # a time-of-day window gets dates for its next occurrence
+        assert (op["startTime"]["hour"], op["startTime"]["minute"]) == (23, 0)
+        assert (op["stopTime"]["hour"], op["stopTime"]["minute"]) == (5, 0)
+        assert op["startTime"]["month"] > 0 and op["startTime"]["day"] > 0
 
 
 def test_resume_without_a_reported_window_never_sends():
@@ -152,17 +157,43 @@ UT_LOOP = {"dailyReservationStartTime": 79680000, "dailyReservationStopTime": 79
            "stopTime": {"month": 0, "hour": 22, "year": 2000, "millisecond": 0, "day": 0, "minute": 10, "second": 0}}
 
 
-@pytest.mark.parametrize("action,mode", [("charge_now", 0), ("resume_schedule", 2)])
-def test_ut_app_window_survives_charge_now_and_resume_exactly(action, mode):
+def test_ut_app_window_charge_now_drops_the_undated_fields_the_gateway_rejects():
     client, _ = _client(UT_LOOP)
 
     async def run():
         await client.load()
         await client.get_status("VIN")
         client._iov_call = AsyncMock(return_value=ACCEPTED)
-        await getattr(client, action)("VIN")
+        await client.charge_now("VIN")
 
     asyncio.run(run())
-    expected = {key: UT_LOOP[key] for key in ("dailyReservationStartTime", "dailyReservationStopTime",
-                                              "weeklyReservation", "chargingEndType", "startTime", "stopTime")}
-    assert _sent(client) == {**expected, "chargingMode": mode}
+    assert _sent(client) == {"dailyReservationStartTime": 79680000, "dailyReservationStopTime": 79800000,
+                             "weeklyReservation": 96, "chargingMode": 0, "chargingEndType": 0}
+
+
+def test_ut_app_window_resumes_in_loop_mode_dated_for_the_next_weekend_day():
+    from datetime import datetime
+    client, _ = _client(UT_LOOP)
+
+    async def run():
+        await client.load()
+        await client.get_status("VIN")
+        client._iov_call = AsyncMock(return_value=ACCEPTED)
+        await client.resume_schedule("VIN")
+
+    asyncio.run(run())
+    op = _sent(client)
+    assert {key: op[key] for key in ("dailyReservationStartTime", "dailyReservationStopTime", "weeklyReservation",
+                                     "chargingMode", "chargingEndType")} == {
+        "dailyReservationStartTime": 79680000, "dailyReservationStopTime": 79800000, "weeklyReservation": 96,
+        "chargingMode": 2, "chargingEndType": 0}
+    start = datetime(*(op["startTime"][key] for key in ("year", "month", "day", "hour", "minute")))
+    stop = datetime(*(op["stopTime"][key] for key in ("year", "month", "day", "hour", "minute")))
+    assert start.weekday() in (5, 6) and (start.hour, start.minute) == (22, 8)
+    assert (stop - start).total_seconds() == 120
+
+
+def test_undated_reported_fields_are_not_kept():
+    window = vehicle.reported_window(UT_LOOP)
+    assert "startTime" not in window and "stopTime" not in window
+    assert window["chargingMode"] == 2 and window["weeklyReservation"] == 96

@@ -202,7 +202,9 @@ class GacClient:
                     if 300 <= resp.status < 400:
                         raise ResponseError(f"unexpected redirect ({resp.status}) from {path}; not followed")
                     if resp.status >= 400:
-                        raise ResponseError(f"HTTP {resp.status} from {path}")
+                        code = self._error_code(host, await resp.read())
+                        detail = f" (result code {code})" if code else ""
+                        raise ResponseError(f"HTTP {resp.status} from {path}{detail}")
                     raw = await resp.read()
             try:
                 outer = _loads(raw)
@@ -215,6 +217,16 @@ class GacClient:
             return outer
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ResponseError("Could not reach GAC") from err
+
+    def _error_code(self, host: str, raw: bytes) -> str | None:
+        """A bounded result code from an HTTP error body, never its message."""
+        try:
+            body = _loads(raw[:65536])
+        except ValueError:
+            return None
+        if isinstance(body, dict) and body.get("encryptData"):
+            body = decrypt_envelope(body, self._response_key(host))
+        return _safe_result_code(body.get("code")) if isinstance(body, dict) else None
 
     def _response_key(self, host: str):
         return (self._m.main if host == self._cfg["main"] else self._m.iov_response or self._m.iov).private
@@ -654,7 +666,8 @@ class GacClient:
         if window is None:
             raise CommandError("no reported charge window to resume; read the status or set a charge window")
         mode = window.get("chargingMode", vehicle.MODE_SCHEDULED)
-        return await self._reservation(vin, vehicle.preserved_operation(window, mode, until_soc=until_soc))
+        return await self._reservation(vin, vehicle.preserved_operation(window, mode, until_soc=until_soc,
+                                                                        tz=self._zone()))
 
     async def charge_pause(self, vin: str) -> Any:
         """Unavailable: scheduling a daily window is not a continuous pause."""

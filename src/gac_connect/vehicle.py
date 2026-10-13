@@ -40,8 +40,6 @@ def _ms_of_day(hh: int, mm: int) -> int:
     return (hh * 60 + mm) * 60000
 
 
-# An Aion UT reports app-made repeating windows with undated calendar fields.
-_LOOP_DATE = {"year": 2000, "month": 0, "day": 0}
 EVERY_DAY = 127
 
 
@@ -85,11 +83,36 @@ def _exact(value: object) -> int | None:
     return int(value) if type(value) is float and value.is_integer() else None
 
 
+def _next_window(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int,
+                 now: datetime | None) -> tuple[datetime, datetime]:
+    """The next start on a selected day (any day for 0) and its stop strictly afterwards."""
+    now = datetime.now(tz) if now is None else now.astimezone(tz)
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    if start <= now:
+        start += timedelta(days=1)
+    while weekly and not weekly & (1 << start.weekday()):
+        start += timedelta(days=1)
+    stop = start.replace(hour=eh, minute=em)
+    if stop <= start:
+        stop += timedelta(days=1)
+    return start, stop
+
+
+def _dated(parts: dict) -> bool:
+    try:
+        datetime(*(parts[name] for name in _STRUCT_KEYS[:5]))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return True
+
+
 def reported_window(charging: object) -> dict | None:
     """The reservation window fields of a ``chargingAccessors`` report, or None.
 
     Both daily times must be usable milliseconds-of-day or Unix-ms values, as the
-    car reported them. Calendar structs are kept only when every part is integral.
+    car reported them. Calendar structs are kept only when they form a real date:
+    an Aion UT reports repeating windows undated (year 2000, month and day 0),
+    and the gateway rejects such a request with HTTP 400.
     """
     if not isinstance(charging, dict):
         return None
@@ -105,23 +128,32 @@ def reported_window(charging: object) -> dict | None:
     for key in ("startTime", "stopTime"):
         struct = charging.get(key)
         parts = {name: _exact(struct.get(name)) for name in _STRUCT_KEYS} if isinstance(struct, dict) else None
-        if parts and all(parts[name] is not None for name in _STRUCT_KEYS[:5]):
+        if parts and _dated(parts):
             window[key] = {name: part if part is not None else 0 for name, part in parts.items()}
     if mode in (MODE_SCHEDULED, MODE_LOOP):
         window["chargingMode"] = mode      # the scheduled mode to resume later
     return window
 
 
-def preserved_operation(window: dict, mode: int, *, until_soc: bool | None = None) -> dict:
+def preserved_operation(window: dict, mode: int, *, until_soc: bool | None = None,
+                        tz: ZoneInfo | None = None, now: datetime | None = None) -> dict:
     """Change only the charging mode (and optionally the stopping rule) of a reported window.
 
-    The window is resent exactly as the car reported it, so switching to free
-    charging and back keeps the owner's schedule instead of overwriting it.
+    The daily times and days are resent as the car reported them, so switching to
+    free charging and back keeps the owner's schedule instead of overwriting it.
+    Free charging carries only dated calendar fields the car reported. A scheduled
+    mode needs dated fields, so for milliseconds-of-day windows they are rebuilt
+    for the next selected occurrence in ``tz``.
     """
+    start, stop = window["dailyReservationStartTime"], window["dailyReservationStopTime"]
+    weekly = window["weeklyReservation"]
+    structs = window.get("startTime"), window.get("stopTime")
+    if mode != MODE_FREE and tz is not None and start < 86_400_000 and stop < 86_400_000:
+        begin, end = _next_window(start // 3_600_000, start // 60_000 % 60, stop // 3_600_000, stop // 60_000 % 60,
+                                  tz, weekly if mode == MODE_LOOP else 0, now)
+        structs = _struct(begin), _struct(end)
     end_type = window["chargingEndType"] if until_soc is None else END_AT_SOC if until_soc else END_AT_TIME
-    return _operation(window["dailyReservationStartTime"], window["dailyReservationStopTime"],
-                      window["weeklyReservation"], mode, end_type,
-                      start_struct=window.get("startTime"), stop_struct=window.get("stopTime"))
+    return _operation(start, stop, weekly, mode, end_type, start_struct=structs[0], stop_struct=structs[1])
 
 
 def pause_operation(tz: ZoneInfo) -> dict:
@@ -150,13 +182,10 @@ def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
     """Build a charge window the way the app does.
 
     Repeating (default): the app's loop mode on the ``weekly`` days (0 sends every
-    day, 127), with milliseconds-of-day and undated calendar fields (year 2000,
-    month and day 0), matching an Aion UT's report of an app-made schedule. A
-    timestamp-format car gets the next selected occurrence, dated, since no app
-    evidence for its repeating format exists yet.
-
-    One-time (``once``): the app's once mode for the next occurrence, dated, with
-    its stop strictly after its start.
+    day, 127). One-time (``once``): the app's once mode. Both carry calendar fields
+    dated for the next (selected) occurrence, with the stop strictly after the
+    start; the gateway rejects undated fields. An Aion UT later reports a
+    repeating window undated (year 2000, month and day 0).
     """
     validate_clock(start_hhmm)
     validate_clock(stop_hhmm)
@@ -171,24 +200,11 @@ def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
         raise ValueError("a one-time window cannot repeat on selected days")
     sh, sm = map(int, start_hhmm.split(":"))
     eh, em = map(int, stop_hhmm.split(":"))
-    now = datetime.now(tz) if now is None else now.astimezone(tz)
-    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-    if start <= now:
-        start += timedelta(days=1)
-    while weekly and not weekly & (1 << start.weekday()):
-        start += timedelta(days=1)
-    stop = start.replace(hour=eh, minute=em)
-    if stop <= start:
-        stop += timedelta(days=1)
-    end_type = END_AT_SOC if until_soc else END_AT_TIME
+    start, stop = _next_window(sh, sm, eh, em, tz, weekly, now)
     mode, days = (MODE_SCHEDULED, 0) if once else (MODE_LOOP, weekly or EVERY_DAY)
-    if timestamp_times:
-        return _operation(int(start.timestamp() * 1000), int(stop.timestamp() * 1000), days, mode, end_type,
-                          start_struct=_struct(start), stop_struct=_struct(stop))
-    if once:
-        return _operation(_ms_of_day(sh, sm), _ms_of_day(eh, em), days, mode, end_type,
-                          start_struct=_struct(start), stop_struct=_struct(stop))
-    undated = {"second": 0, "millisecond": 0, **_LOOP_DATE}
-    return _operation(_ms_of_day(sh, sm), _ms_of_day(eh, em), days, mode, end_type,
-                      start_struct={**undated, "hour": sh, "minute": sm},
-                      stop_struct={**undated, "hour": eh, "minute": em})
+    return _operation(
+        int(start.timestamp() * 1000) if timestamp_times else _ms_of_day(sh, sm),
+        int(stop.timestamp() * 1000) if timestamp_times else _ms_of_day(eh, em), days, mode,
+        END_AT_SOC if until_soc else END_AT_TIME,
+        start_struct=_struct(start), stop_struct=_struct(stop),
+    )

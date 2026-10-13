@@ -326,9 +326,9 @@ class VehicleStatus:
             tyres[index - 1] = Tyre(str(index), pressure, temperature)
 
         def any_open(key: str, sub: str) -> bool | None:
-            items = _items(results, key)
-            modes = [_exact_int(i.get(sub)) if isinstance(i, dict) and _not_invalid(i, f"{sub}Flag") else None
-                     for i in items]
+            # Items flagged invalid (e.g. a UT's unused hatch 3) are left out, not counted as unknown.
+            items = [i for i in _items(results, key) if not (isinstance(i, dict) and not _not_invalid(i, f"{sub}Flag"))]
+            modes = [_exact_int(i.get(sub)) if isinstance(i, dict) else None for i in items]
             if any(mode is not None and mode > 0 for mode in modes):
                 return True
             return False if modes and all(mode == 0 for mode in modes) else None
