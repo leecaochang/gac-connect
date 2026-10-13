@@ -57,6 +57,7 @@ from .const import (
     PROFILE_MATERIAL,
     REGIONS,
     SSO_SERVICE_ID,
+    SUCCESS_RESULT_CODES,
     USER_AGENT,
 )
 from .crypto import decrypt_envelope, encrypt_envelope, encrypt_sensitive
@@ -485,7 +486,7 @@ class GacClient:
         # The app's generic read wrapper accepts "0" and other normal success
         # codes, without requiring the main API's success boolean. Keep async
         # command-only codes out of this metadata read and do not broaden _ok.
-        success_code = type(code) in (int, str) and str(code) in {"0", "0000", "1000", "2000", "13000"}
+        success_code = type(code) in (int, str) and str(code) in SUCCESS_RESULT_CODES
         if (not isinstance(resp, dict) or resp.get("success") is False
                 or not (success_code or (code is None and self._ok(resp)))):
             safe_code = _safe_result_code(code)
@@ -659,12 +660,15 @@ def command_session_id(resp: Any) -> str | None:
 
 
 def _command_result(resp: Any) -> Any:
-    """13001 "ongoing" is an accepted async command, not an error."""
+    """13001 "ongoing" is an accepted async command; the app's success codes are accepted too."""
     if isinstance(resp, dict):
         code = resp.get("code")
         if code == ERR_TOKEN_INVALID:
             raise TokenInvalidError("token invalid; refresh and reissue the command")
-        if resp.get("success") is True or code in (CODE_COMMAND_ACCEPTED, str(CODE_COMMAND_ACCEPTED), "0000"):
+        text = str(code) if type(code) in (int, str) else None
+        # An explicit success=false outweighs a generic success code, never the async acceptance code.
+        if (resp.get("success") is True or text == str(CODE_COMMAND_ACCEPTED)
+                or (text in SUCCESS_RESULT_CODES and resp.get("success") is not False)):
             return resp
         raise CommandError(f"command rejected: {_msg(resp)}", code=code)
     raise CommandError("command response must be an object with an acceptance result")

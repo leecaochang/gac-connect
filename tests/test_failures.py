@@ -104,7 +104,9 @@ def test_malformed_command_response_is_not_acceptance(body):
     assert http.post.call_count == 1
 
 
-@pytest.mark.parametrize("body", [{"success": True}, {"code": 13001}, {"code": "13001"}, {"code": "0000"}])
+@pytest.mark.parametrize("body", [{"success": True}, {"code": 13001}, {"code": "13001"}, {"code": "0000"},
+                                  {"code": "0"}, {"code": 0}, {"code": "1000"}, {"code": 2000}, {"code": "13000"},
+                                  {"success": False, "code": 13001}])
 def test_explicit_command_acceptance_is_preserved(body):
     client, http, _ = make_client(Response(body=body), valid=True)
     async def run():
@@ -306,3 +308,13 @@ def test_anti_bodies_keep_their_identifier():
     from gac_connect.commands import Command, build_body
     body = build_body(Command("x", "/x", "anti"), "VIN", {"identifier": {"vin": "OTHER"}, "currentDuration": 10})
     assert body == {"identifier": {"vin": "VIN"}, "currentDuration": 10}
+
+
+@pytest.mark.parametrize("body", [{"success": False, "code": "0000"}, {"success": False, "code": 0}, {"code": True},
+                                  {"code": 13002}, {"code": "13101"}, {"code": None}])
+def test_explicit_failures_and_unknown_codes_are_rejections(body):
+    from gac_connect.client import _command_result
+    from gac_connect.errors import CommandError
+
+    with pytest.raises(CommandError):
+        _command_result(body)

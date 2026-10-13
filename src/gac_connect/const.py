@@ -168,7 +168,10 @@ RECOVERY_PAUSE: Final = MAX_RATE_LIMIT_COOLDOWN
 # Gateway result codes.
 CODE_OK: Final = "0000"
 CODE_COMMAND_ACCEPTED: Final = 13001      # async command queued ("ongoing") — success
+# The app's common response-success predicate (GAC 2.0.32) accepts these codes.
+SUCCESS_RESULT_CODES: Final = frozenset({"0", "0000", "1000", "2000", "13000"})
 CODE_COMMAND_MALFORMED: Final = 13101
+CODE_UNSUPPORTED_VALUE: Final = 13002     # e.g. an Aion UT refusing remote fan speeds 8–10
 ERR_TOKEN_INVALID: Final = "SDK.GATE.0007"
 ERR_VIN_HEADER: Final = "SDK.GATE.0017"
 ERR_REPEAT_REQUEST: Final = "SDK.GATE.0018"

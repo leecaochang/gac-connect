@@ -303,6 +303,15 @@ def test_push_helpers():
     assert interpret(b'{"code": 0, "data": {"updateTime": 1.5e3}}').update_time_ms == 1500
     assert interpret(b'{"code": 0, "data": {"updateTime": NaN}}').update_time_ms is None
     assert "password" not in repr(BrokerInfo.from_data({"host": "b", "password": "secret", "topics": ["t"]}))
+    assert BrokerInfo.from_data({"host": "b", "topics": "acct/1/result"}).topics == ("acct/1/result",)
+    assert BrokerInfo.from_data({"host": "b", "topics": "a/1, b/2"}).topics == ("a/1", "b/2")
+    assert BrokerInfo.from_data({"host": "b", "topics": ["t", 7, " ", None]}).topics == ("t",)
+    assert BrokerInfo.from_data({"host": "b", "topics": {"t": 1}}).topics == ()
+    assert interpret(b'{"code": null, "resultCode": "0000"}').ok is True
+    assert interpret(b'{"code": null, "resultCode": null, "status": "fail"}').ok is False
+    assert interpret(b'{"code": 13002}').ok is False
+    for code in (b'"1000"', b"2000", b'"13000"'):
+        assert interpret(b'{"code": ' + code + b"}").ok is True
 
 
 def test_charge_power_and_time():

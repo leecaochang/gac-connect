@@ -27,17 +27,27 @@ try:
 except ImportError:  # pragma: no cover
     aiomqtt = None
 
+from .const import CODE_UNSUPPORTED_VALUE, SUCCESS_RESULT_CODES
 from .errors import GacError
 
 _LOGGER = logging.getLogger(__name__)
 
 MessageHandler = Callable[[str, bytes, "PushResult"], Awaitable[None] | None]
 
-# Result codes with a known meaning; anything else is reported as unknown.
 STABLE_SECONDS = 60          # a connection this old resets the reconnect backoff
 
-SUCCESS_CODES = frozenset({"0", "0000", "200", "success"})
-FAILURE_CODES = frozenset({"13101", "13102", "13103", "fail", "failed", "error"})
+# Result codes with a known meaning; anything else is reported as unknown.
+SUCCESS_CODES = SUCCESS_RESULT_CODES | {"200", "success"}
+FAILURE_CODES = frozenset({str(CODE_UNSUPPORTED_VALUE), "13101", "13102", "13103", "fail", "failed", "error"})
+
+
+def _topics(value: Any) -> tuple[str, ...]:
+    """Topic names from a list, or from one (comma-separated) string."""
+    if isinstance(value, str):
+        value = value.split(",")
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(topic.strip() for topic in value if isinstance(topic, str) and topic.strip())
 
 
 @dataclass(frozen=True)
@@ -72,7 +82,7 @@ class BrokerInfo:
         return cls(
             host=host, port=port, tls=tls,
             client_id=str(data.get("clientId") or ""), username=str(data.get("username") or ""),
-            password=str(data.get("password") or ""), topics=tuple(data.get("topics") or ()),
+            password=str(data.get("password") or ""), topics=_topics(data.get("topics")),
         )
 
 
@@ -126,7 +136,7 @@ def interpret(payload: bytes) -> PushResult:
         return PushResult(None, None, None, None)
     if not isinstance(obj, dict):
         return PushResult(None, None, None, obj)
-    code = obj.get("code", obj.get("resultCode", obj.get("status")))
+    code = next((obj[key] for key in ("code", "resultCode", "status") if obj.get(key) is not None), None)
     ok: bool | None = None
     success = obj.get("success")
     if isinstance(success, bool):
