@@ -115,3 +115,31 @@ def test_reported_window_drops_malformed_parts():
     })
     assert window == {"dailyReservationStartTime": 1, "dailyReservationStopTime": 2, "weeklyReservation": 0,
                       "chargingEndType": 0, "stopTime": {**CALENDAR, "second": 0}}
+
+
+def test_resume_keeps_the_last_reported_loop_mode_after_free_charging():
+    client, http = _client({**TIME_OF_DAY, "chargingMode": 2})
+
+    async def run():
+        await client.load()
+        await client.get_status("VIN")
+        http.post.return_value = Response(body=_status({**TIME_OF_DAY, "chargingMode": 0}))
+        await client.get_status("VIN")
+        client._iov_call = AsyncMock(return_value=ACCEPTED)
+        await client.resume_schedule("VIN")
+
+    asyncio.run(run())
+    assert _sent(client)["chargingMode"] == 2
+
+
+def test_resume_without_a_scheduled_report_uses_once_like_set_charge_window():
+    client, _ = _client({**TIME_OF_DAY, "chargingMode": 0})
+
+    async def run():
+        await client.load()
+        await client.get_status("VIN")
+        client._iov_call = AsyncMock(return_value=ACCEPTED)
+        await client.resume_schedule("VIN")
+
+    asyncio.run(run())
+    assert _sent(client)["chargingMode"] == 1

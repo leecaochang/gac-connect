@@ -23,7 +23,8 @@ from .errors import CommandError
 
 _RESERVATION = f"{IOV_PREFIX}/charging/reservation"
 MODE_FREE = 0
-MODE_SCHEDULED = 1
+MODE_SCHEDULED = 1   # the app's "once"
+MODE_LOOP = 2        # the app's "loop"
 END_AT_TIME = 0
 END_AT_SOC = 1
 
@@ -90,6 +91,7 @@ def reported_window(charging: object) -> dict | None:
         return None
     weekly = _exact(charging.get("weeklyReservation"))
     end_type = _exact(charging.get("chargingEndType"))
+    mode = _exact(charging.get("chargingMode"))
     window = {"dailyReservationStartTime": start, "dailyReservationStopTime": stop,
               "weeklyReservation": weekly if weekly is not None and 0 <= weekly <= 127 else 0,
               "chargingEndType": end_type if end_type in (END_AT_TIME, END_AT_SOC) else END_AT_TIME}
@@ -98,6 +100,8 @@ def reported_window(charging: object) -> dict | None:
         parts = {name: _exact(struct.get(name)) for name in _STRUCT_KEYS} if isinstance(struct, dict) else None
         if parts and all(parts[name] is not None for name in _STRUCT_KEYS[:5]):
             window[key] = {name: part if part is not None else 0 for name, part in parts.items()}
+    if mode in (MODE_SCHEDULED, MODE_LOOP):
+        window["chargingMode"] = mode      # the scheduled mode to resume later
     return window
 
 

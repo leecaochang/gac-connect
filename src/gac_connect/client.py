@@ -462,6 +462,9 @@ class GacClient:
             self._charge_time_formats[vin] = status.charge_time_format
         charging = reports[0].get("chargingAccessors")
         if (window := vehicle.reported_window(charging[0] if isinstance(charging, list) and charging else None)):
+            previous = self._charge_windows.get(vin, {})
+            if "chargingMode" not in window and "chargingMode" in previous:
+                window["chargingMode"] = previous["chargingMode"]   # free now; remember how it was scheduled
             self._charge_windows[vin] = window
         return status
 
@@ -641,14 +644,16 @@ class GacClient:
         """Return to scheduled charging with the window the car last reported.
 
         This is not a continuous pause: the car charges inside that window. The
-        stopping rule is kept unless ``until_soc`` is given. Raises CommandError,
-        without sending, before any status read has reported a usable window.
+        last reported scheduled mode (once or loop) and stopping rule are kept,
+        unless ``until_soc`` is given; with no scheduled report seen, "once" is
+        used, like set_charge_window. Raises CommandError, without sending,
+        before any status read has reported a usable window.
         """
         window = self._charge_windows.get(vin)
         if window is None:
             raise CommandError("no reported charge window to resume; read the status or set a charge window")
-        return await self._reservation(vin, vehicle.preserved_operation(window, vehicle.MODE_SCHEDULED,
-                                                                        until_soc=until_soc))
+        mode = window.get("chargingMode", vehicle.MODE_SCHEDULED)
+        return await self._reservation(vin, vehicle.preserved_operation(window, mode, until_soc=until_soc))
 
     async def charge_pause(self, vin: str) -> Any:
         """Unavailable: scheduling a daily window is not a continuous pause."""

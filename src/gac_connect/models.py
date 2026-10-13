@@ -13,6 +13,9 @@ with the gateway's quirks resolved:
 * openMode 0 = closed, >0 = open, negative = unknown;
 * the A/C is "on" when the compressor flag is set or the fan is running;
 * powerMode 0 = off and 2 = on, verified with Aion UT reports; other codes stay unknown;
+* current, charge time, range, cabin temperature and openings whose ``…Flag``
+  companion is explicitly 0/false are not valid → None (a missing flag counts as valid);
+* chargingMode follows the app: 0 immediately, 1 once, 2 loop;
 * reservations can use calendar fields, Unix milliseconds, or milliseconds-of-day;
   explicit calendar fields take precedence over timestamp clock conversions.
 
@@ -36,9 +39,14 @@ class ChargingStatus(IntEnum):
 
 
 class ChargingMode(IntEnum):
-    FREE = 0        # charge whenever plugged in
-    SCHEDULED = 1   # only inside the reservation window
+    FREE = 0        # charge whenever plugged in (the app's "immediately")
+    SCHEDULED = 1   # only inside the reservation window (the app's "once")
+    LOOP = 2        # inside the window on the selected days (the app's "loop")
     UNKNOWN = -1
+
+    @property
+    def scheduled(self) -> bool:
+        return self in (ChargingMode.SCHEDULED, ChargingMode.LOOP)
 
 
 _MAX_CHARGE_MINUTES = 7 * 24 * 60   # maximum accepted charge duration
@@ -111,6 +119,12 @@ def doors_locked(status: VehicleStatus | None, model: str | None = None) -> bool
 def _enabled(item: dict, flag: str) -> bool:
     value = item.get(flag, True)
     return value if isinstance(value, bool) else _exact_int(value) == 1
+
+
+def _not_invalid(item: dict, flag: str) -> bool:
+    """False only for an explicit 0/false validity flag; other or missing values do not hide a reading."""
+    value = item.get(flag)
+    return value is not False and not (type(value) in (int, float) and value == 0)
 
 
 def _bounded(value: Any, low: float, high: float = math.inf) -> float | None:
@@ -275,10 +289,10 @@ class VehicleStatus:
             keep_minutes = None
 
         soc = _bounded(drv.get("remainElectricityPercentage"), 0, 1)
-        cur = _bounded(chg.get("chargingCurrent"), 0)
+        cur = _bounded(chg.get("chargingCurrent"), 0) if _not_invalid(chg, "chargingCurrentFlag") else None
         if cur is not None and cur >= cls._CURRENT_UNKNOWN:
             cur = None
-        est = _num(chg.get("estimatedChargedDuration"))
+        est = _num(chg.get("estimatedChargedDuration")) if _not_invalid(chg, "estimatedChargedDurationFlag") else None
         if est is not None and not 0 <= est < _MAX_CHARGE_MINUTES:
             est = None   # discard an out-of-range duration
         volt = _num(chg.get("chargingVoltage")) if _enabled(chg, "chargingVoltageFlag") else None
@@ -313,7 +327,8 @@ class VehicleStatus:
 
         def any_open(key: str, sub: str) -> bool | None:
             items = _items(results, key)
-            modes = [_exact_int(i.get(sub)) if isinstance(i, dict) else None for i in items]
+            modes = [_exact_int(i.get(sub)) if isinstance(i, dict) and _not_invalid(i, f"{sub}Flag") else None
+                     for i in items]
             if any(mode is not None and mode > 0 for mode in modes):
                 return True
             return False if modes and all(mode == 0 for mode in modes) else None
@@ -377,6 +392,8 @@ class VehicleStatus:
             if calendar is not None and timestamp is not None:
                 comparisons.append(calendar == timestamp)
         end_type = _exact_int(chg.get("chargingEndType"))
+        range_km = _bounded(drv.get("remainVoyageCourse"), 0) if _not_invalid(drv, "remainVoyageCourseFlag") else None
+        cabin_temp = _num(env.get("temperatureInsideCar")) if _not_invalid(env, "temperatureInsideCarFlag") else None
 
         return cls(
             online=online if isinstance(online, bool) else {0: False, 1: True}.get(_exact_int(online)),
@@ -384,9 +401,9 @@ class VehicleStatus:
             power_on={0: False, 2: True}.get(vehicle_power),
             power_mode=vehicle_power,
             soc=round(soc * 100, 1) if soc is not None else None,
-            range_km=_bounded(drv.get("remainVoyageCourse"), 0),
+            range_km=range_km,
             charging={0: False, 2: True}.get(_exact_int(chg.get("chargingStatus"))),
-            charging_mode=ChargingMode(mode) if mode in (0, 1) else None,
+            charging_mode=ChargingMode(mode) if mode in (0, 1, 2) else None,
             charge_current_a=cur,
             charge_voltage_v=volt,
             charge_power_kw=power,
@@ -395,7 +412,7 @@ class VehicleStatus:
             charger_locked={0: True, 1: False}.get(_exact_int(cgr.get("lock"))),
             # A real odometer is never 0; a zero placeholder would look like a meter reset.
             odometer_km=_bounded(drv.get("totalVoyageCourse"), 0) or None,
-            cabin_temp_c=_num(env.get("temperatureInsideCar")),
+            cabin_temp_c=cabin_temp,
             outside_temp_c=_num(env.get("temperatureOutsideCar")),
             pm25=_bounded(env.get("pm25"), 0),
             aux_voltage=_bounded(bat.get("voltage"), 0),

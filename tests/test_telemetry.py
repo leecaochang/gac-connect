@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from gac_connect.errors import GacError
-from gac_connect.models import VehicleStatus, doors_locked
+from gac_connect.models import ChargingMode, VehicleStatus, doors_locked
 from test_failures import Response, make_client
 
 
@@ -211,3 +211,33 @@ def test_saturated_charge_current_is_unknown_and_never_becomes_power(current, ex
 def test_zero_odometer_is_a_placeholder(value, expected):
     status = VehicleStatus.from_results({"drivingOverviewAccessors": [{"totalVoyageCourse": value}]})
     assert status.odometer_km == expected
+
+
+@pytest.mark.parametrize("value,expected", [(0, ChargingMode.FREE), (1, ChargingMode.SCHEDULED), (2, ChargingMode.LOOP),
+                                            (3, None), (-1, None), (True, None)])
+def test_app_charging_modes_decode_immediately_once_and_loop(value, expected):
+    status = VehicleStatus.from_results({"chargingAccessors": [{"chargingMode": value}]})
+    assert status.charging_mode is expected
+    if expected is not None:
+        assert status.charging_mode.scheduled is (value in (1, 2))
+
+
+@pytest.mark.parametrize("flag,valid", [(0, False), (False, False), (0.0, False), (1, True), (True, True), (None, True),
+                                        (-1, True), ("0", True)])
+def test_explicitly_invalid_readings_are_unknown(flag, valid):
+    status = VehicleStatus.from_results({
+        "chargingAccessors": [{"chargingCurrent": 16, "chargingCurrentFlag": flag,
+                               "estimatedChargedDuration": 90, "estimatedChargedDurationFlag": flag}],
+        "drivingOverviewAccessors": [{"remainVoyageCourse": 300, "remainVoyageCourseFlag": flag}],
+        "environmentAccessors": [{"temperatureInsideCar": 31, "temperatureInsideCarFlag": flag}],
+        "hatchAccessors": [{"openMode": 1, "openModeFlag": flag}],
+    })
+    readings = (status.charge_current_a, status.estimated_charge_minutes, status.range_km, status.cabin_temp_c,
+                status.hatch_open)
+    assert readings == ((16, 90, 300, 31, True) if valid else (None,) * 5)
+
+
+def test_missing_validity_flags_keep_readings():
+    status = VehicleStatus.from_results({"chargingAccessors": [{"chargingCurrent": 16}],
+                                         "hatchAccessors": [{"openMode": 0}, {"openMode": 0}]})
+    assert status.charge_current_a == 16 and status.hatch_open is False
