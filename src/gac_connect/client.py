@@ -661,15 +661,16 @@ class GacClient:
         raise CommandError(vehicle.PAUSE_UNSUPPORTED)
 
     async def set_charge_window(self, vin: str, start: str, stop: str, *,
-                                weekly: int = 0, until_soc: bool = False) -> Any:
-        """Use the time representation learned by get_status for this vehicle.
+                                weekly: int = 0, until_soc: bool = False, once: bool = False) -> Any:
+        """Schedule charging on the ``weekly`` days (0 = every day), or ``once`` for the next occurrence.
 
-        Before any usable report, retain the legacy milliseconds-of-day format.
-        A timestamp request uses the configured scheduling zone for both dates
-        and timestamps. Acceptance still needs vehicle confirmation.
+        Uses the time representation learned by get_status for this vehicle;
+        before any usable report, the milliseconds-of-day format. A timestamp
+        request uses the configured scheduling zone for both dates and
+        timestamps. Acceptance still needs vehicle confirmation.
         """
         op = vehicle.window_operation(start, stop, self._zone(),
-                                      weekly=weekly, until_soc=until_soc,
+                                      weekly=weekly, until_soc=until_soc, once=once,
                                       timestamp_times=self._charge_time_formats.get(vin) == "timestamp")
         return await self._reservation(vin, op)
 

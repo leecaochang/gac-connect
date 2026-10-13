@@ -6,9 +6,11 @@ The gateway has no plain "start" / "stop"; charging is gated through the schedul
   window is resent unchanged, so the owner's schedule survives. The command
   returns immediately; the car applies it asynchronously and resuming can take
   several minutes.
-* **resume schedule** — mode 1 with the last reported window, resent unchanged.
+* **resume schedule** — the last reported scheduled mode with the last reported
+  window, resent unchanged.
 * **pause** — unavailable until a continuous stop operation is verified.
-* **set window** — mode 1 with a real daily window.
+* **set window** — mode 2 (the app's "loop") repeating on the selected days, or
+  mode 1 (the app's "once") for the next occurrence only.
 
 Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64; 0 = every day).
 """
@@ -36,6 +38,11 @@ PAUSE_UNSUPPORTED = (
 
 def _ms_of_day(hh: int, mm: int) -> int:
     return (hh * 60 + mm) * 60000
+
+
+# An Aion UT reports app-made repeating windows with undated calendar fields.
+_LOOP_DATE = {"year": 2000, "month": 0, "day": 0}
+EVERY_DAY = 127
 
 
 def _struct(dt: datetime) -> dict:
@@ -139,8 +146,18 @@ def validate_weekly(weekly: int | float) -> int:
 
 def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
                      weekly: int = 0, until_soc: bool = False, now: datetime | None = None,
-                     timestamp_times: bool = False) -> dict:
-    """Schedule the next selected start day, with its stop strictly afterwards."""
+                     timestamp_times: bool = False, once: bool = False) -> dict:
+    """Build a charge window the way the app does.
+
+    Repeating (default): the app's loop mode on the ``weekly`` days (0 sends every
+    day, 127), with milliseconds-of-day and undated calendar fields (year 2000,
+    month and day 0), matching an Aion UT's report of an app-made schedule. A
+    timestamp-format car gets the next selected occurrence, dated, since no app
+    evidence for its repeating format exists yet.
+
+    One-time (``once``): the app's once mode for the next occurrence, dated, with
+    its stop strictly after its start.
+    """
     validate_clock(start_hhmm)
     validate_clock(stop_hhmm)
     weekly = validate_weekly(weekly)
@@ -148,6 +165,10 @@ def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
         raise ValueError("start and stop must differ; use Charge now for unrestricted charging")
     if not isinstance(until_soc, bool):
         raise ValueError("until_soc must be a boolean")
+    if not isinstance(once, bool):
+        raise ValueError("once must be a boolean")
+    if once and weekly:
+        raise ValueError("a one-time window cannot repeat on selected days")
     sh, sm = map(int, start_hhmm.split(":"))
     eh, em = map(int, stop_hhmm.split(":"))
     now = datetime.now(tz) if now is None else now.astimezone(tz)
@@ -159,9 +180,15 @@ def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
     stop = start.replace(hour=eh, minute=em)
     if stop <= start:
         stop += timedelta(days=1)
-    return _operation(
-        int(start.timestamp() * 1000) if timestamp_times else _ms_of_day(sh, sm),
-        int(stop.timestamp() * 1000) if timestamp_times else _ms_of_day(eh, em), weekly, MODE_SCHEDULED,
-        END_AT_SOC if until_soc else END_AT_TIME,
-        start_struct=_struct(start), stop_struct=_struct(stop),
-    )
+    end_type = END_AT_SOC if until_soc else END_AT_TIME
+    mode, days = (MODE_SCHEDULED, 0) if once else (MODE_LOOP, weekly or EVERY_DAY)
+    if timestamp_times:
+        return _operation(int(start.timestamp() * 1000), int(stop.timestamp() * 1000), days, mode, end_type,
+                          start_struct=_struct(start), stop_struct=_struct(stop))
+    if once:
+        return _operation(_ms_of_day(sh, sm), _ms_of_day(eh, em), days, mode, end_type,
+                          start_struct=_struct(start), stop_struct=_struct(stop))
+    undated = {"second": 0, "millisecond": 0, **_LOOP_DATE}
+    return _operation(_ms_of_day(sh, sm), _ms_of_day(eh, em), days, mode, end_type,
+                      start_struct={**undated, "hour": sh, "minute": sm},
+                      stop_struct={**undated, "hour": eh, "minute": em})

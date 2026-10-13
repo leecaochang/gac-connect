@@ -143,3 +143,26 @@ def test_resume_without_a_scheduled_report_uses_once_like_set_charge_window():
 
     asyncio.run(run())
     assert _sent(client)["chargingMode"] == 1
+
+
+# An Aion UT's report of an app-made Sat+Sun 22:08–22:10 repeating window (2026-10-13).
+UT_LOOP = {"dailyReservationStartTime": 79680000, "dailyReservationStopTime": 79800000, "weeklyReservation": 96,
+           "chargingMode": 2, "chargingEndType": 0, "reservationChargingFlag": 1,
+           "startTime": {"month": 0, "hour": 22, "year": 2000, "millisecond": 0, "day": 0, "minute": 8, "second": 0},
+           "stopTime": {"month": 0, "hour": 22, "year": 2000, "millisecond": 0, "day": 0, "minute": 10, "second": 0}}
+
+
+@pytest.mark.parametrize("action,mode", [("charge_now", 0), ("resume_schedule", 2)])
+def test_ut_app_window_survives_charge_now_and_resume_exactly(action, mode):
+    client, _ = _client(UT_LOOP)
+
+    async def run():
+        await client.load()
+        await client.get_status("VIN")
+        client._iov_call = AsyncMock(return_value=ACCEPTED)
+        await getattr(client, action)("VIN")
+
+    asyncio.run(run())
+    expected = {key: UT_LOOP[key] for key in ("dailyReservationStartTime", "dailyReservationStopTime",
+                                              "weeklyReservation", "chargingEndType", "startTime", "stopTime")}
+    assert _sent(client) == {**expected, "chargingMode": mode}

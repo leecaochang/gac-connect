@@ -34,7 +34,7 @@ def test_public_schedule_helpers_share_validation_and_construction():
     assert validate_clock("23:00") == "23:00"
     assert validate_weekly(1.0) == 1
     zone = ZoneInfo("Asia/Bangkok")
-    operation = window_operation("23:00", "05:00", zone, weekly=1,
+    operation = window_operation("23:00", "05:00", zone, once=True,
                                  now=datetime(2026, 10, 11, 23, tzinfo=zone))
     assert operation["startTime"]["day"] == 12
     assert operation["stopTime"]["day"] == 13
