@@ -191,7 +191,7 @@ def test_status_climate_and_window():
 def test_fitted_and_time_edges():
     from gac_connect.models import VehicleStatus, _hhmm
     s = VehicleStatus.from_results({
-        "hatchAccessors": [{"openMode": -1, "hatch": 1}, {"openMode": 0, "hatch": 2}],
+        "hatchAccessors": [{"openMode": -1, "hatch": 2}, {"openMode": 0, "hatch": 3}],
         "windowAccessors": [{"openMode": "2"}],
     })
     assert s.hatch_open is None         # a partly unknown group is not known closed

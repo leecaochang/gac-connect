@@ -41,7 +41,8 @@ READINGS = frozenset({
     "outside_temp_c", "ac_fan_strength", "ac_auto_on", "ac_compressor_on", "anti_theft_on", "battery_precondition_mode",
     "charge_current_a", "charge_voltage_v", "charge_power_kw", "estimated_charge_minutes",
     "charge_window_start", "charge_window_stop", "charge_weekly", "charging_mode", "updated_ms",
-    "plugged_in", "charging", "locked", "door_open", "window_open", "hatch_open", "online",
+    "plugged_in", "charging", "locked", "door_open", "window_open", "hatch_open", "hood_open", "online",
+    "brake_fluid_low",
     "charger_locked", "sunroof_open", "steering_heat_on", "lights_on", "ac_on", "ac_target_temp_c",
     "fridge_mode", "fridge_temp_c", "fridge_keep_mode", "fridge_keep_minutes", "latitude", "longitude",
     *(f"tyre_{i}_{kind}" for i in range(1, 5) for kind in ("pressure", "temperature")),
@@ -108,7 +109,8 @@ _CAPABILITY_FEATURES: dict[str, tuple[str, str, tuple[int, ...]]] = {
     "window_open": ("windowCapabilities", "openModeCapability", _READ),
     # The ventilate command sits with the windows in the app's capability model.
     "ventilation": ("windowCapabilities", "ventilateModeCapability", _CONTROL),
-    # Hatch numbers differ from the status report's, so any listed hatch counts.
+    # An Aion UT lists hatch 3 (the boot) controllable and hatch 1 (the bonnet) switched
+    # off, though the bonnet is reported; so the bonnet follows the reports alone.
     "tailgate": ("hatchCapabilities", "openModeCapability", _CONTROL),
     "hatch_open": ("hatchCapabilities", "openModeCapability", _READ),
     "sunroof": ("sunroofCapabilities", "openModeCapability", _CONTROL),
@@ -116,6 +118,7 @@ _CAPABILITY_FEATURES: dict[str, tuple[str, str, tuple[int, ...]]] = {
     "lights": ("lightCapabilities", "openCapability", _CONTROL),
     "lights_on": ("lightCapabilities", "openCapability", _READ),
     "horn": ("hornCapabilities", "hootCapability", _CONTROL),
+    "brake_fluid_low": ("brakeCapabilities", "alarmsCapability", _READ),
     "steering_heat": ("steeringCapabilities", "controlCapability", (1, 2, 3)),
     "steering_heat_on": ("steeringCapabilities", "controlCapability", (1, 2, 3)),
     "fridge": ("refrigeratorCapabilities", "refrigeratorCapability", _CONTROL),

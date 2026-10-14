@@ -379,12 +379,41 @@ def test_http_errors_carry_only_a_bounded_result_code(body, detail):
     assert (detail in message) if detail else "result code" not in message
 
 
-def test_invalid_hatch_items_are_ignored_rather_than_unknown():
+# An Aion UT's hatches as reported: all closed, the boot opened, the bonnet opened (2026-10-14).
+UT_HATCHES = {
+    "closed": [{"hatch": 1, "openModeFlag": 1, "openMode": 0, "alarms": []},
+               {"hatch": 3, "openModeFlag": 0, "openMode": 0, "alarms": []}],
+    "boot": [{"hatch": 1, "openModeFlag": 1, "openMode": 0, "alarms": []},
+             {"hatch": 3, "openModeFlag": 1, "openMode": 1, "alarms": [{"alarmObject": 3, "alarmReason": 1}]}],
+    "bonnet": [{"hatch": 1, "openModeFlag": 1, "openMode": 1, "alarms": [{"alarmObject": 1, "alarmReason": 1}]},
+               {"hatch": 3, "openModeFlag": 0, "openMode": 0, "alarms": []}],
+}
+
+
+@pytest.mark.parametrize("case,boot,bonnet", [("closed", False, False), ("boot", True, False), ("bonnet", False, True)])
+def test_hatch_1_is_the_bonnet_and_hatch_3_the_boot(case, boot, bonnet):
     from gac_connect.models import VehicleStatus
-    hatches = [{"hatch": 1, "openModeFlag": 1, "openMode": 0}, {"hatch": 3, "openModeFlag": 0, "openMode": 0}]
-    assert VehicleStatus.from_results({"hatchAccessors": hatches}).hatch_open is False
-    hatches[0]["openMode"] = 1
-    assert VehicleStatus.from_results({"hatchAccessors": hatches}).hatch_open is True
+    status = VehicleStatus.from_results({"hatchAccessors": UT_HATCHES[case]})
+    assert (status.hatch_open, status.hood_open) == (boot, bonnet)
+
+
+def test_a_flagged_off_hatch_reading_other_than_closed_is_unknown():
+    from gac_connect.models import VehicleStatus
+    status = VehicleStatus.from_results({"hatchAccessors": [{"hatch": 3, "openModeFlag": 0, "openMode": 1}]})
+    assert status.hatch_open is None and status.hood_open is None
+
+
+@pytest.mark.parametrize("brake,low", [
+    ([{"alarms": []}], False),                                   # an Aion UT, as the app shows Normal
+    ([{"alarms": [{"alarmReason": -1}]}], False),
+    ([{"alarms": [{"alarmObject": 1, "alarmReason": 1}]}], True),
+    ([{}], None),
+    (None, None),
+])
+def test_brake_fluid_follows_the_brake_alarms_as_the_app_does(brake, low):
+    from gac_connect.models import VehicleStatus
+    results = {"brakeAccessors": brake} if brake is not None else {}
+    assert VehicleStatus.from_results(results).brake_fluid_low is low
 
 
 def test_http_error_replies_are_logged_as_a_bounded_masked_excerpt(caplog):

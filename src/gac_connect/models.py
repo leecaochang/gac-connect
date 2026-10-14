@@ -228,8 +228,10 @@ class VehicleStatus:
     locked: bool | None = None               # True = all doors locked
     door_open: bool | None = None
     window_open: bool | None = None
-    hatch_open: bool | None = None
+    hatch_open: bool | None = None           # the boot: every hatch except 1
+    hood_open: bool | None = None            # hatch 1, the bonnet
     sunroof_open: bool | None = None
+    brake_fluid_low: bool | None = None
     tyres: list[Tyre] = field(default_factory=list)
     # climate
     ac_on: bool | None = None
@@ -342,12 +344,37 @@ class VehicleStatus:
             tyres[index - 1] = Tyre(str(index), pressure, temperature)
 
         def any_open(key: str, sub: str) -> bool | None:
-            # Items flagged invalid (e.g. a UT's unused hatch 3) are left out, not counted as unknown.
+            # Items flagged invalid are left out, not counted as unknown.
             items = [i for i in _items(results, key) if not (isinstance(i, dict) and not _not_invalid(i, f"{sub}Flag"))]
             modes = [_exact_int(i.get(sub)) if isinstance(i, dict) else None for i in items]
             if any(mode is not None and mode > 0 for mode in modes):
                 return True
             return False if modes and all(mode == 0 for mode in modes) else None
+
+        def hatch_open(hood: bool) -> bool | None:
+            """Hatch 1 is the bonnet and the others the boot, as an Aion UT reports them.
+
+            A closed UT boot (hatch 3) reports openModeFlag 0 with openMode 0, and flag 1
+            once open, so a flagged-off 0 counts as closed; other flagged-off values are unknown.
+            """
+            def mode(item: dict) -> int | None:
+                value = _exact_int(item.get("openMode"))
+                return value if _not_invalid(item, "openModeFlag") or value == 0 else None
+
+            modes = [mode(i) for i in _items(results, "hatchAccessors")
+                     if isinstance(i, dict) and (_exact_int(i.get("hatch")) == 1) == hood]
+            if any(mode is not None and mode > 0 for mode in modes):
+                return True
+            return False if modes and all(mode == 0 for mode in modes) else None
+
+        def brake_fluid_low() -> bool | None:
+            """The app's brake-fluid check reads only brakeAccessors[].alarms; a positive reason is an alarm."""
+            items = [i for i in _items(results, "brakeAccessors") if isinstance(i, dict)]
+            lists = [i.get("alarms") for i in items if isinstance(i.get("alarms"), list)]
+            if not lists:
+                return None
+            reasons = [_exact_int(a.get("alarmReason")) for alarms in lists for a in alarms if isinstance(a, dict)]
+            return any(reason is not None and reason > 0 for reason in reasons)
 
         # Negative values are "unknown / not fitted" sentinels. A/C is on when the
         # compressor or the fan reports on; off only when both explicitly report off.
@@ -435,7 +462,9 @@ class VehicleStatus:
             locked=locked,
             door_open=any_open("doorAccessors", "openMode"),
             window_open=any_open("windowAccessors", "openMode"),
-            hatch_open=any_open("hatchAccessors", "openMode"),
+            hatch_open=hatch_open(hood=False),
+            hood_open=hatch_open(hood=True),
+            brake_fluid_low=brake_fluid_low(),
             sunroof_open=any_open("sunroofAccessors", "openMode"),
             tyres=tyres,
             ac_on=ac_on,
