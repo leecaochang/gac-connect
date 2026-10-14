@@ -97,7 +97,7 @@ All methods are coroutines unless noted. `vin` is the vehicle's VIN.
 |---|---|
 | `get_status(vin)` | Full status as a `VehicleStatus`. |
 | `get_position(vin)` | Raw position record. |
-| `get_control_capabilities(vin)` | Raw capability metadata. |
+| `get_control_capabilities(vin)` | The car's capability list: what it offers remotely, by feature. |
 
 **Climate and seats**
 
@@ -228,7 +228,8 @@ All derive from `GacError`.
 | `validate_weekly(value)` | Check a day bitmask (0–127). |
 | `window_operation(start, stop, tz, *, weekly=0, until_soc=False)` | The charge-window request body. |
 | `local_mobile(value, country_tel)` | A mobile number in national format. |
-| `Capabilities`, `Support` | Equipment detection from status reports. |
+| `equipment_from_capabilities(data)` | Equipment flags from a `get_control_capabilities` response. |
+| `Capabilities`, `Support` | Equipment detection from the capability list and status reports. |
 
 ## Regions
 
