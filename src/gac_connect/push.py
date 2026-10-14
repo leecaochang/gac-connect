@@ -183,6 +183,9 @@ class PushClient:
         self._allow_plaintext = allow_plaintext
         self._stop = asyncio.Event()
         self.connected = False
+        # The broker last connected to; on a plaintext broker its topics, client ID and
+        # user name travel unencrypted.
+        self.broker: BrokerInfo | None = None
 
     async def run(self) -> None:
         if aiomqtt is None:  # pragma: no cover
@@ -205,6 +208,7 @@ class PushClient:
                     for topic in info.topics:
                         await client.subscribe(topic)
                     self.connected = True
+                    self.broker = info
                     connected_at = monotonic()
                     _LOGGER.debug("push channel connected (%d topic(s), tls=%s)", len(info.topics), info.tls)
                     await self._pump(client)

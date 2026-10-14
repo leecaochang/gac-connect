@@ -55,4 +55,5 @@ def test_transport_requires_tls_or_explicit_consent(host, allow, connect):
             assert (factory.call_args.kwargs["tls_context"] is not None) is host.startswith("ssl:")
             client._pump.assert_awaited_once()
         assert client.connected is False
+        assert (client.broker.topics if client.broker else None) == (("result",) if connect else None)
     asyncio.run(run())
