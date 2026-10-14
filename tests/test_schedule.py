@@ -65,11 +65,28 @@ def test_no_days_is_a_one_time_window_sent_in_loop_mode():
 
 
 def test_one_time_overnight_window_is_dated_for_the_next_start():
-    op = window_operation("23:00", "05:00", ZONE, now=datetime(2026, 10, 13, 23, 30, tzinfo=ZONE), until_soc=True)
-    assert (op["chargingMode"], op["weeklyReservation"], op["chargingEndType"]) == (2, 0, 1)
+    op = window_operation("23:00", "05:00", ZONE, now=datetime(2026, 10, 13, 23, 30, tzinfo=ZONE))
+    assert (op["chargingMode"], op["weeklyReservation"], op["chargingEndType"]) == (2, 0, 0)
     assert stamp(op["startTime"]).isoformat() == "2026-10-14T23:00:00+07:00"
     assert stamp(op["stopTime"]).isoformat() == "2026-10-15T05:00:00+07:00"
-    assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (23 * 3600000, 5 * 3600000)
+    # A stop after midnight is sent as its time of day plus 24 h, as the app does.
+    assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (23 * 3600000, 29 * 3600000)
+
+
+@pytest.mark.parametrize("stop", ["05:00", "23:00", None])
+def test_stopping_at_the_charge_limit_sends_no_stop_time(stop):
+    # Verified on an Aion UT: with a stop time the gateway refuses this with 13101.
+    op = window_operation("23:00", stop, ZONE, weekly=127, until_soc=True,
+                          now=datetime(2026, 10, 13, 12, tzinfo=ZONE))
+    assert op == {"dailyReservationStartTime": 23 * 3600000, "weeklyReservation": 127, "chargingMode": 2,
+                  "chargingEndType": 1, "startTime": {"year": 2026, "month": 10, "day": 13, "hour": 23,
+                                                      "minute": 0, "second": 0, "millisecond": 0}}
+
+
+@pytest.mark.parametrize("stop", [None, "23:00", "25:00"])
+def test_a_window_ending_at_a_time_needs_a_valid_stop_time(stop):
+    with pytest.raises(ValueError):
+        window_operation("23:00", stop, ZONE)
 
 
 def test_client_sends_one_time_or_repeating_windows_from_the_selected_days():

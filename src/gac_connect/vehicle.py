@@ -20,7 +20,11 @@ schedule field is refused with HTTP 400. Loop mode with times of day and dated
 calendar fields is accepted with or without days. Mode 1 is refused with 13101,
 whether its times are of day or Unix ms, so a reported once window (mode 1,
 Unix-ms times encoding the calendar clock in UTC+8) is resent as loop without
-days. ``chargingEndType`` 1 is refused with 13101.
+days. Stopping at the car's charge limit (``chargingEndType`` 1) sends no stop
+time, as the app does; with one the request is refused with 13101. The car keeps
+its saved stop time. A window that crosses midnight sends its stop as the time of
+day plus 24 hours (00:10 as 24:10), as the app does and as the car reports it; a stop
+earlier than the start is refused with 13002.
 """
 from __future__ import annotations
 
@@ -44,6 +48,9 @@ PAUSE_UNSUPPORTED = (
 )
 
 
+_DAY_MS = 86_400_000
+
+
 def _ms_of_day(hh: int, mm: int) -> int:
     return (hh * 60 + mm) * 60000
 
@@ -58,16 +65,14 @@ def _struct(dt: datetime) -> dict:
 
 def _operation(start_ms: int, stop_ms: int, weekly: int, mode: int, end_type: int,
                start_struct: dict | None = None, stop_struct: dict | None = None) -> dict:
-    op = {
-        "dailyReservationStartTime": start_ms,
-        "dailyReservationStopTime": stop_ms,
-        "weeklyReservation": weekly,
-        "chargingMode": mode,
-        "chargingEndType": end_type,
-    }
+    """A reservation; stopping at the charge limit leaves the stop time out, as the app does."""
+    op = {"dailyReservationStartTime": start_ms, "weeklyReservation": weekly,
+          "chargingMode": mode, "chargingEndType": end_type}
+    if end_type != END_AT_SOC:
+        op["dailyReservationStopTime"] = stop_ms
     if start_struct is not None:
         op["startTime"] = start_struct
-    if stop_struct is not None:
+    if stop_struct is not None and end_type != END_AT_SOC:
         op["stopTime"] = stop_struct
     return op
 
@@ -150,17 +155,22 @@ def reported_window(charging: object) -> dict | None:
 
 def _build(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int, end_type: int,
            now: datetime | None) -> dict:
-    """Loop mode with times of day, dated for the next occurrence (on a selected day, if any)."""
+    """Loop mode with times of day, dated for the next occurrence (on a selected day, if any).
+
+    A stop at or before the start is the next day's, sent as its time of day plus 24 h
+    (00:10 as 24:10), as the app does.
+    """
     start, stop = _next_window(sh, sm, eh, em, tz, weekly, now)
-    return _operation(_ms_of_day(sh, sm), _ms_of_day(eh, em), weekly, MODE_LOOP, end_type,
+    stop_ms = _ms_of_day(eh, em) + (_DAY_MS if (eh, em) <= (sh, sm) else 0)
+    return _operation(_ms_of_day(sh, sm), stop_ms, weekly, MODE_LOOP, end_type,
                       start_struct=_struct(start), stop_struct=_struct(stop))
 
 
 def _window_clock(window: dict) -> tuple[int, int, int, int]:
     """Start and stop clock (hour, minute) of a reported window."""
     start, stop = window["dailyReservationStartTime"], window["dailyReservationStopTime"]
-    if start < 86_400_000 and stop < 86_400_000:
-        return start // 3_600_000, start // 60_000 % 60, stop // 3_600_000, stop // 60_000 % 60
+    if start < _DAY_MS and stop < 2 * _DAY_MS:      # a stop past midnight reads as 24:10 and so on
+        return start // 3_600_000, start // 60_000 % 60, stop // 3_600_000 % 24, stop // 60_000 % 60
     first, last = window.get("startTime"), window.get("stopTime")
     if first and last:
         return first["hour"], first["minute"], last["hour"], last["minute"]
@@ -208,20 +218,23 @@ def validate_weekly(weekly: int | float) -> int:
     return int(weekly)
 
 
-def window_operation(start_hhmm: str, stop_hhmm: str, tz: ZoneInfo, *,
+def window_operation(start_hhmm: str, stop_hhmm: str | None, tz: ZoneInfo, *,
                      weekly: int = 0, until_soc: bool = False, now: datetime | None = None) -> dict:
     """Build a charge window: selected days repeat, 127 is every day, and 0 is one time (the app's Once).
 
     The calendar fields are dated for the next (selected) occurrence, with the
-    stop strictly after the start.
+    stop strictly after the start. With ``until_soc`` the car stops at its charge
+    limit and no stop time is sent, so ``stop_hhmm`` may be None.
     """
-    validate_clock(start_hhmm)
-    validate_clock(stop_hhmm)
-    weekly = validate_weekly(weekly)
-    if start_hhmm == stop_hhmm:
-        raise ValueError("start and stop must differ; use Charge now for unrestricted charging")
     if not isinstance(until_soc, bool):
         raise ValueError("until_soc must be a boolean")
+    validate_clock(start_hhmm)
+    if stop_hhmm is None and until_soc:
+        stop_hhmm = start_hhmm          # not sent
+    validate_clock(stop_hhmm)
+    weekly = validate_weekly(weekly)
+    if start_hhmm == stop_hhmm and not until_soc:
+        raise ValueError("start and stop must differ; use Charge now to charge whenever plugged in")
     sh, sm = map(int, start_hhmm.split(":"))
     eh, em = map(int, stop_hhmm.split(":"))
     return _build(sh, sm, eh, em, tz, weekly, END_AT_SOC if until_soc else END_AT_TIME, now)

@@ -68,10 +68,14 @@ def test_resume_resends_the_reported_window_and_stopping_rule_in_scheduled_mode(
     asyncio.run(run())
     op = _sent(client)   # repeat (loop) is resumed with times of day, dated for the next occurrence
     assert op["chargingMode"] == 2 and op["chargingEndType"] == report["chargingEndType"]
-    assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (23 * 3600000, 5 * 3600000)
+    assert op["dailyReservationStartTime"] == 23 * 3600000
     assert op["weeklyReservation"] == report["weeklyReservation"]
-    assert (op["startTime"]["hour"], op["startTime"]["minute"], op["stopTime"]["hour"]) == (23, 0, 5)
-    assert _when(op["stopTime"]) > _when(op["startTime"]) and op["startTime"]["month"] > 0
+    assert (op["startTime"]["hour"], op["startTime"]["minute"]) == (23, 0) and op["startTime"]["month"] > 0
+    if report["chargingEndType"] == 1:      # stopping at the charge limit sends no stop time
+        assert "dailyReservationStopTime" not in op and "stopTime" not in op
+    else:          # 05:00 after a 23:00 start is the next day's, sent as 29:00
+        assert op["dailyReservationStopTime"] == 29 * 3600000 and op["stopTime"]["hour"] == 5
+        assert _when(op["stopTime"]) > _when(op["startTime"])
 
 
 def test_resume_without_a_reported_window_never_sends():
@@ -202,3 +206,29 @@ def test_resuming_an_app_once_window_rebuilds_it_for_the_next_occurrence():
     assert (op["chargingMode"], op["weeklyReservation"]) == (2, 0)
     assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (79560000, 79920000)
     assert (op["startTime"]["hour"], op["startTime"]["minute"]) == (22, 6)
+
+
+# An app-made repeating window across midnight on an Aion UT (23:09–00:10, Fri and Sat).
+APP_OVERNIGHT = {"dailyReservationStartTime": 83340000, "dailyReservationStopTime": 87000000,
+                 "weeklyReservation": 48, "chargingMode": 2, "chargingEndType": 0,
+                 "startTime": {**CALENDAR, "year": 0, "month": 0, "day": 0, "hour": 23, "minute": 9},
+                 "stopTime": {**CALENDAR, "year": 0, "month": 0, "day": 0, "hour": 0, "minute": 10}}
+
+
+def test_a_window_across_midnight_reads_and_resumes_as_the_app_set_it():
+    from gac_connect.models import VehicleStatus
+    status = VehicleStatus.from_results({"chargingAccessors": [APP_OVERNIGHT]})
+    assert (status.charge_window_start, status.charge_window_stop) == ("23:09", "00:10")
+    assert status.charge_time_format == "time_of_day"
+    client, _ = _client({**APP_OVERNIGHT, "chargingMode": 0})
+
+    async def run():
+        await client.load()
+        await client.get_status("VIN")
+        client._iov_call = AsyncMock(return_value=ACCEPTED)
+        await client.resume_schedule("VIN")
+
+    asyncio.run(run())
+    op = _sent(client)
+    assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (83340000, 87000000)
+    assert op["weeklyReservation"] == 48 and _when(op["stopTime"]) > _when(op["startTime"])

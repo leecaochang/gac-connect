@@ -134,12 +134,17 @@ def _bounded(value: Any, low: float, high: float = math.inf) -> float | None:
     return number if number is not None and low <= number <= high else None
 
 
+# Times of day run past 24 h for a stop after midnight (00:10 as 24:10); Unix-ms
+# reservation times are far larger.
+_TIME_OF_DAY_MS = 2 * 86_400_000
+
+
 def _hhmm(ms: Any) -> str | None:
-    """Milliseconds-of-day -> "HH:MM"; None outside 0 <= ms < 24 h."""
+    """Milliseconds-of-day -> "HH:MM", a stop past midnight included; None otherwise."""
     v = _num(ms)
-    if v is None or not 0 <= v < 86_400_000:
+    if v is None or not 0 <= v < _TIME_OF_DAY_MS:
         return None
-    minutes = int(v) // 60000
+    minutes = int(v) // 60000 % (24 * 60)
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
@@ -158,7 +163,7 @@ def _calendar_clock(value: Any) -> str | None:
 def _timestamp_clock(value: Any) -> str | None:
     """A reservation timestamp as the calendar clock it encodes (service clock, UTC+8)."""
     stamp = _exact_int(value)
-    if stamp is None or not 86_400_000 <= stamp < 253402300800000:
+    if stamp is None or not _TIME_OF_DAY_MS <= stamp < 253402300800000:
         return None
     try:
         return datetime.fromtimestamp(stamp / 1000, SERVICE_CLOCK).strftime("%H:%M")
@@ -168,9 +173,9 @@ def _timestamp_clock(value: Any) -> str | None:
 
 def _reservation_format(chg: dict) -> str | None:
     values = [_exact_int(chg.get(key)) for key in ("dailyReservationStartTime", "dailyReservationStopTime")]
-    if all(value is not None and 0 <= value < 86_400_000 for value in values):
+    if all(value is not None and 0 <= value < _TIME_OF_DAY_MS for value in values):
         return "time_of_day"
-    if all(value is not None and 86_400_000 <= value < 253402300800000 for value in values):
+    if all(value is not None and _TIME_OF_DAY_MS <= value < 253402300800000 for value in values):
         return "timestamp"
     return None
 

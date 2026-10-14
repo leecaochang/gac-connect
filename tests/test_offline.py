@@ -201,7 +201,8 @@ def test_fitted_and_time_edges():
     assert s.window_open is True        # numeric strings decode
     assert VehicleStatus.from_results({"hatchAccessors": [{"openMode": "x"}]}).hatch_open is None
     assert _hhmm(0) == "00:00" and _hhmm(86_399_000) == "23:59"
-    assert _hhmm(86_400_000) is None and _hhmm(-1) is None and _hhmm("abc") is None
+    assert _hhmm(87_000_000) == "00:10"            # a stop past midnight, as the car reports it
+    assert _hhmm(172_800_000) is None and _hhmm(-1) is None and _hhmm("abc") is None
 
 
 def test_climate_validation():
