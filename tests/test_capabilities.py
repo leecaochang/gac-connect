@@ -117,3 +117,58 @@ def test_seat_and_anti_theft_status_do_not_invent_remote_controls():
     assert caps.command("seat-1-ventilation-on").state is Support.SUPPORTED
     assert caps.command("seat-1-ventilation-off").state is Support.UNKNOWN
     assert caps.feature("seat_2_ventilation").state is Support.UNKNOWN
+
+
+
+def _ut_capabilities():
+    import json
+    from pathlib import Path
+    return json.loads((Path(__file__).parent / "fixtures" / "ut_capabilities.json").read_text())
+
+
+def test_an_aion_ut_capability_list_matches_the_car():
+    from gac_connect import equipment_from_capabilities
+    flags = equipment_from_capabilities(_ut_capabilities())
+    offered = {"climate", "doors", "windows", "ventilation", "tailgate", "lights", "horn", "battery_precondition",
+               "charge_control", "vehicle_power_control", "sterilisation", "seat_1_ventilation", "seat_2_ventilation",
+               "soc", "range_km", "odometer_km", "cabin_temp_c", "outside_temp_c", "aux_voltage", "plugged_in",
+               "charger_locked", "charging", "charge_current_a", "charge_voltage_v", "charge_power_kw",
+               "estimated_charge_minutes", "location", "power_on", "anti_theft_on", "locked", "door_open",
+               "window_open", "hatch_open", "lights_on", "ac_fan_strength", "ac_compressor_on", "ac_auto_on",
+               "seat_1_ventilation_on", "seat_2_ventilation_on"}
+    absent = {"sunroof", "sunroof_open", "steering_heat", "steering_heat_on", "fridge", "fridge_mode", "pm25",
+              "seat_3_ventilation", "seat_4_ventilation", "seat_3_ventilation_on", "seat_4_ventilation_on",
+              *(f"tyre_{i}_{kind}" for i in range(1, 5) for kind in ("pressure", "temperature"))}
+    assert {feature for feature in offered if flags.get(feature) is not True} == set()
+    assert {feature for feature in absent if flags.get(feature) is not False} == set()
+
+
+def test_capability_flags_win_over_placeholder_readings_and_can_be_replaced():
+    from gac_connect import Capabilities, Support, equipment_from_capabilities
+    from gac_connect.models import VehicleStatus
+    caps = Capabilities("Aion UT")
+    caps.observe(VehicleStatus(sunroof_open=False, pm25=0.0))      # placeholders the UT sends
+    assert caps.feature("sunroof").state is caps.feature("pm25").state is Support.SUPPORTED
+    caps.observe_equipment(equipment_from_capabilities(_ut_capabilities()), replace=True)
+    for feature in ("sunroof", "pm25"):
+        assert (caps.feature(feature).state, caps.feature(feature).source) == (Support.UNSUPPORTED, "vehicle_equipment")
+    assert caps.feature("horn").state is Support.SUPPORTED          # a control with no reading
+    caps.observe_equipment({"horn": False}, replace=True)
+    assert caps.feature("sunroof").state is Support.SUPPORTED       # back to the reading once replaced
+    assert caps.feature("horn").state is Support.UNSUPPORTED
+
+
+def test_a_partial_or_unreadable_list_proves_nothing():
+    from gac_connect import equipment_from_capabilities
+    for data in (None, {}, {"capabilities": []}, {"capabilities": [{"capability": {"remoteCapability": {
+            "hornCapabilities": [{"controlCapability": 1, "hootCapability": 3}]}}}]}):
+        assert equipment_from_capabilities(data) == {}
+
+
+def test_an_available_group_that_omits_a_field_leaves_it_to_the_reports():
+    from gac_connect import equipment_from_capabilities
+    data = _ut_capabilities()
+    window = data["capabilities"][0]["capability"]["remoteCapability"]["windowCapabilities"][0]
+    del window["ventilateModeCapability"]
+    flags = equipment_from_capabilities(data)
+    assert "ventilation" not in flags and flags["windows"] is True

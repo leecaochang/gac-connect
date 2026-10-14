@@ -2,9 +2,8 @@
 
 Missing reports never prove absence. Reading a state does not prove that a
 remote command works. This module performs no I/O and never probes the vehicle.
-Callers may provide explicit equipment flags only from a verified source.
-The optional client capability query returns raw metadata; this passive
-detector does not interpret its uncalibrated numeric flags.
+Callers may provide explicit equipment flags only from a verified source, such as
+``equipment_from_capabilities`` applied to the car's capability list.
 """
 from __future__ import annotations
 
@@ -79,6 +78,117 @@ COMMAND_FEATURES = {
 }
 FEATURES = READINGS | EQUIPMENT_READINGS.keys()
 
+# The car's capability list (GacClient.get_control_capabilities). Each group has a
+# controlCapability switch: 0 means the group is not available, and its other values
+# are then defaults. Field levels: 0 none, 1 read, 2 control, 3 read and control.
+_READ, _CONTROL = (1, 3), (2, 3)
+# feature -> (group, field, levels that grant it). Checked against an Aion UT: absent
+# groups (steering, tyres) and switched-off groups (fridge, sunroof, rear seats)
+# matched the car, as did its fan, outlet and seat ranges.
+_CAPABILITY_FEATURES: dict[str, tuple[str, str, tuple[int, ...]]] = {
+    "climate": ("airConditionCapabilities", "temperatureCapability", _CONTROL),
+    "ac_target_temp_c": ("airConditionCapabilities", "temperatureCapability", _READ),
+    "ac_fan_strength": ("airConditionCapabilities", "windStrengthCapability", _READ),
+    "ac_auto_on": ("airConditionCapabilities", "enableAutoModeCapability", _READ),
+    "ac_compressor_on": ("airConditionCapabilities", "enableAirCompressorCapability", _READ),
+    "sterilisation": ("airConditionCapabilities", "airConditionAntivirusModeCapability", _CONTROL),
+    "doors": ("doorCapabilities", "lockCapability", _CONTROL),
+    "locked": ("doorCapabilities", "lockCapability", _READ),
+    "door_open": ("doorCapabilities", "openModeCapability", _READ),
+    "windows": ("windowCapabilities", "openModeCapability", _CONTROL),
+    "window_open": ("windowCapabilities", "openModeCapability", _READ),
+    # The ventilate command sits with the windows in the app's capability model.
+    "ventilation": ("windowCapabilities", "ventilateModeCapability", _CONTROL),
+    # Hatch numbers differ from the status report's, so any listed hatch counts.
+    "tailgate": ("hatchCapabilities", "openModeCapability", _CONTROL),
+    "hatch_open": ("hatchCapabilities", "openModeCapability", _READ),
+    "sunroof": ("sunroofCapabilities", "openModeCapability", _CONTROL),
+    "sunroof_open": ("sunroofCapabilities", "openModeCapability", _READ),
+    "lights": ("lightCapabilities", "openCapability", _CONTROL),
+    "lights_on": ("lightCapabilities", "openCapability", _READ),
+    "horn": ("hornCapabilities", "hootCapability", _CONTROL),
+    "steering_heat": ("steeringCapabilities", "controlCapability", (1, 2, 3)),
+    "steering_heat_on": ("steeringCapabilities", "controlCapability", (1, 2, 3)),
+    "fridge": ("refrigeratorCapabilities", "refrigeratorCapability", _CONTROL),
+    **{reading: ("refrigeratorCapabilities", "refrigeratorCapability", _READ)
+       for reading in ("fridge_mode", "fridge_temp_c", "fridge_keep_mode", "fridge_keep_minutes")},
+    "battery_precondition": ("batteryPretreatmentCapabilities", "batteryPretreatmentModeCapability", _CONTROL),
+    "battery_precondition_mode": ("batteryPretreatmentCapabilities", "batteryPretreatmentModeCapability", _READ),
+    "charge_control": ("chargingCapabilities", "chargingModeCapability", _CONTROL),
+    "charging_mode": ("chargingCapabilities", "chargingModeCapability", _READ),
+    "charging": ("chargingCapabilities", "chargingStatusCapability", _READ),
+    "charge_current_a": ("chargingCapabilities", "chargingCurrentCapability", _READ),
+    "charge_voltage_v": ("chargingCapabilities", "chargingVoltageCapability", _READ),
+    "estimated_charge_minutes": ("chargingCapabilities", "estimatedChargedDurationCapability", _READ),
+    "charge_window_start": ("chargingCapabilities", "dailyReservationTimeSettingCapability", _READ),
+    "charge_window_stop": ("chargingCapabilities", "dailyReservationTimeSettingCapability", _READ),
+    "charge_weekly": ("chargingCapabilities", "weeklyReservationCapability", _READ),
+    "plugged_in": ("chargerCapability", "plugCapability", _READ),
+    "charger_locked": ("chargerCapability", "lockCapability", _READ),
+    "power_on": ("powerCapabilities", "powerCapability", _READ),
+    "vehicle_power_control": ("powerCapabilities", "powerCapability", _CONTROL),
+    "cabin_temp_c": ("environmentCapabilities", "temperatureInsideCarCapability", _READ),
+    "outside_temp_c": ("environmentCapabilities", "temperatureOutsideCarCapability", _READ),
+    "pm25": ("environmentCapabilities", "pm25Capability", _READ),
+    "soc": ("drivingOverviewCapabilities", "remainElectricityPercentageCapability", _READ),
+    "range_km": ("drivingOverviewCapabilities", "remainVoyageCourseCapability", _READ),
+    "odometer_km": ("drivingOverviewCapabilities", "totalVoyageCourseCapability", _READ),
+    "aux_voltage": ("batteryCapabilities", "voltageCapability", _READ),
+    "anti_theft_on": ("antiTheftCapabilities", "enableCapability", _READ),
+    "latitude": ("positionCapabilities", "latitudeCapability", _READ),
+    "longitude": ("positionCapabilities", "longitudeCapability", _READ),
+    "location": ("positionCapabilities", "latitudeCapability", _READ),
+}
+# Groups listed per seat or tyre, by their ID field.
+_SEAT_FEATURES = {f"seat_{i}_ventilation": (i, _CONTROL) for i in range(1, 5)} | {
+    f"seat_{i}_ventilation_on": (i, _READ) for i in range(1, 5)}
+# Fewer groups than this means a partial answer, which proves nothing about absence.
+_MIN_GROUPS = 5
+
+
+def _level(value: Any) -> int:
+    return value if type(value) is int and 0 <= value <= 3 else 0
+
+
+def _flag(remote: dict, group: str, field: str, levels: tuple[int, ...],
+          match: dict[str, Any] | None = None) -> bool | None:
+    """True or False from the list; None when an available group does not mention the field."""
+    items = [item for item in remote.get(group) or () if isinstance(item, dict)
+             and all(item.get(key) == value for key, value in (match or {}).items())]
+    available = [item for item in items if _level(item.get("controlCapability")) >= 1]
+    if not available:
+        return False                      # not listed, or switched off
+    if field != "controlCapability" and not any(field in item for item in available):
+        return None
+    return any(_level(item.get(field)) in levels for item in available)
+
+
+def equipment_from_capabilities(data: Any) -> dict[str, bool]:
+    """What the car's capability list offers remotely, as equipment flags.
+
+    Takes the response of ``GacClient.get_control_capabilities``. A feature whose
+    group is missing or switched off is False; one the list does not mention is
+    left out. Returns {} for a response too small to rely on.
+    """
+    records = data.get("capabilities") if isinstance(data, dict) else None
+    record = records[0] if isinstance(records, list) and records else data
+    capability = record.get("capability", record) if isinstance(record, dict) else None
+    remote = capability.get("remoteCapability") if isinstance(capability, dict) else None
+    if not isinstance(remote, dict) or sum(isinstance(v, list) for v in remote.values()) < _MIN_GROUPS:
+        return {}
+    remote = dict(remote)
+    if "chargerCapabilities" in remote and "chargerCapability" not in remote:
+        remote["chargerCapability"] = remote["chargerCapabilities"]
+    flags = {feature: _flag(remote, *spec) for feature, spec in _CAPABILITY_FEATURES.items()}
+    for feature, (seat, levels) in _SEAT_FEATURES.items():
+        flags[feature] = _flag(remote, "seatTemperatureCapabilities", "enableWindCapability", levels, {"seat": seat})
+    for i in range(1, 5):
+        for kind, field in (("pressure", "pressureCapability"), ("temperature", "temperatureCapability")):
+            flags[f"tyre_{i}_{kind}"] = _flag(remote, "tyreCapabilities", field, _READ, {"tyre": i})
+    if flags.get("charge_current_a") is not None and flags.get("charge_voltage_v") is not None:
+        flags["charge_power_kw"] = bool(flags["charge_current_a"] and flags["charge_voltage_v"])
+    return {feature: value for feature, value in flags.items() if value is not None}
+
 
 def _known(value: Any) -> bool:
     if isinstance(value, (int, float)):
@@ -118,11 +228,16 @@ class Capabilities:
                 self._readings.add(f"seat_{seat.position}_ventilation_on")
         return before != self.export_state()
 
-    def observe_equipment(self, flags: dict[str, bool]) -> bool:
-        """Accept only explicit booleans for known equipment from a verified source."""
+    def observe_equipment(self, flags: dict[str, bool], *, replace: bool = False) -> bool:
+        """Accept only explicit booleans for known features from a verified source.
+
+        ``replace`` discards earlier flags first, for a fresh read of the same source.
+        """
         before = dict(self._equipment)
+        if replace:
+            self._equipment.clear()
         self._equipment.update({key: value for key, value in flags.items()
-                                if key in EQUIPMENT_READINGS and isinstance(value, bool)})
+                                if key in FEATURES and isinstance(value, bool)})
         return self._equipment != before
 
     def confirm_command(self, command: str) -> bool:
