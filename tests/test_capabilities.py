@@ -182,10 +182,10 @@ def _air_and_seats(data):
 def test_an_aion_ut_capability_list_gives_its_verified_remote_ranges():
     from gac_connect import ranges_from_capabilities
     assert ranges_from_capabilities(_ut_capabilities()) == {
-        "fan_speeds": (1, 2, 3, 4, 5, 6, 7), "blowing_modes": (1, 2, 3, 4),
+        "fan_speeds": (1, 2, 3, 4, 5, 6, 7), "blowing_modes": (1, 2, 3, 4), "cycling_modes": (1, 2, 3),
+        "ac_temperature_range": (18, 32), "ac_minutes_range": (5, 60), "battery_precondition_modes": (0, 1),
         "seat_1_ventilation_levels": (1, 2, 3), "seat_2_ventilation_levels": (1, 2, 3),
-        "seat_3_ventilation_levels": (), "seat_4_ventilation_levels": (),
-    }
+    }   # the switched-off fridge and rear-seat groups state nothing
 
 
 def test_ranges_stay_within_what_the_library_sends():
@@ -215,12 +215,48 @@ def test_a_field_without_control_offers_no_choice_and_an_unstated_one_is_left_ou
     assert ranges["seat_2_ventilation_levels"] == (1, 2, 3)
 
 
-def test_a_switched_off_group_offers_no_ranges_and_a_partial_list_proves_nothing():
+def test_a_switched_off_group_states_no_ranges_and_a_partial_list_proves_nothing():
     from gac_connect import ranges_from_capabilities
     data = _ut_capabilities()
     air, _ = _air_and_seats(data)
     air["controlCapability"] = 0
     ranges = ranges_from_capabilities(data)
-    assert ranges["fan_speeds"] == ranges["blowing_modes"] == ()
+    assert not {"fan_speeds", "blowing_modes", "ac_temperature_range", "ac_minutes_range"} & set(ranges)
     for data in (None, {}, {"capabilities": []}):
         assert ranges_from_capabilities(data) == {}
+
+
+def test_spans_convert_units_and_stay_within_what_the_library_sends():
+    from gac_connect import ranges_from_capabilities
+    data = _ut_capabilities()
+    air, _ = _air_and_seats(data)
+    air.update(minTemperature=16, maxTemperature=28.5, minAirConditionCurrentDuration=600,
+               maxAirConditionCurrentDuration=1830)
+    ranges = ranges_from_capabilities(data)
+    assert ranges["ac_temperature_range"] == (18, 28)
+    assert ranges["ac_minutes_range"] == (10, 30)
+    air.update(minTemperature=33, maxTemperature=40, minAirConditionCurrentDuration="60")
+    ranges = ranges_from_capabilities(data)
+    assert ranges["ac_temperature_range"] == () and "ac_minutes_range" not in ranges
+
+
+def test_a_fitted_fridge_gives_its_modes_and_temperatures():
+    from gac_connect import ranges_from_capabilities
+    data = _ut_capabilities()
+    fridge = data["capabilities"][0]["capability"]["remoteCapability"]["refrigeratorCapabilities"][0]
+    fridge.update(controlCapability=1, workingMode=[1, 3, 4], minRefrigerationTemperature=2, maxFreezingTemperature=-5)
+    ranges = ranges_from_capabilities(data)
+    assert ranges["fridge_modes"] == (1, 4)        # 3 is off, its own command
+    assert ranges["fridge_refrigerate_temperature_range"] == (2, 20)
+    assert ranges["fridge_heat_temperature_range"] == (35, 50)
+    assert ranges["fridge_freeze_temperature_range"] == (-15, -5)
+
+
+def test_listed_codes_are_limited_to_those_the_library_sends():
+    from gac_connect import ranges_from_capabilities
+    data = _ut_capabilities()
+    remote = data["capabilities"][0]["capability"]["remoteCapability"]
+    remote["batteryPretreatmentCapabilities"][0]["supportBatteryPretreatmentModes"] = [2, 3]
+    remote["airConditionCapabilities"][0]["supportCyclingModes"] = [0, 2]
+    ranges = ranges_from_capabilities(data)
+    assert ranges["battery_precondition_modes"] == () and ranges["cycling_modes"] == (2,)

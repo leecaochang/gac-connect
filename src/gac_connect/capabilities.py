@@ -12,7 +12,14 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from .commands import FAN_SPEEDS, SEAT_VENTILATION_LEVELS
+from .commands import (
+    CLIMATE_MINUTES_RANGE,
+    CLIMATE_TEMP_RANGE,
+    FAN_SPEEDS,
+    FRIDGE_MODES,
+    FRIDGE_TEMP_RANGE,
+    SEAT_VENTILATION_LEVELS,
+)
 
 
 class Support(StrEnum):
@@ -205,19 +212,20 @@ def equipment_from_capabilities(data: Any) -> dict[str, bool]:
 
 
 def _choices(items: list[dict], field: str, values) -> tuple[int, ...] | None:
-    """``values(item)`` for the first entry that states ``field``.
+    """``values(item)`` for the first switched-on entry that states ``field``; () when it grants no control.
 
-    () when no entry is switched on or the field grants no control; None when the
-    switched-on entries do not mention it.
+    None when no entry is switched on (its values are then template defaults) or none mentions the field.
     """
-    if not items:
-        return ()
     item = next((item for item in items if field in item), None)
     if item is None:
         return None
     if _level(item[field]) not in _CONTROL:
         return ()
     return values(item)
+
+
+def _number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
 
 
 def _between(low_field: str, high_field: str, accepted: range):
@@ -230,32 +238,74 @@ def _between(low_field: str, high_field: str, accepted: range):
     return values
 
 
-def _blowing_modes(item: dict) -> tuple[int, ...] | None:
-    codes = item.get("supportBlowingModes")
-    if not isinstance(codes, list):
-        return None
-    # Code 0 is listed by an Aion UT but its meaning is unknown; commands send positive codes only.
-    return tuple(sorted({code for code in codes if type(code) is int and code > 0}))
+def _span(low_field: str, high_field: str, bounds: tuple[float, float], per: int = 1):
+    """(lowest, highest) whole number within an entry's advertised minimum and maximum and ``bounds``.
+
+    ``per`` converts the advertised unit, for example 60 for seconds to minutes.
+    """
+    def values(item: dict) -> tuple[int, ...] | None:
+        low, high = item.get(low_field), item.get(high_field)
+        if not _number(low) or not _number(high):
+            return None
+        lo = max(math.ceil(low / per), math.ceil(bounds[0]))
+        hi = min(math.floor(high / per), math.floor(bounds[1]))
+        return (lo, hi) if lo <= hi else ()
+    return values
+
+
+def _codes(field: str, accepted: tuple[int, ...] | None = None):
+    """The listed codes this library sends: those in ``accepted``, or else any positive code."""
+    def values(item: dict) -> tuple[int, ...] | None:
+        codes = item.get(field)
+        if not isinstance(codes, list):
+            return None
+        return tuple(sorted({code for code in codes if type(code) is int
+                             and (code in accepted if accepted is not None else code > 0)}))
+    return values
+
+
+_FRIDGE_FIELDS = {"refrigerate": "Refrigeration", "heat": "Heating", "freeze": "Freezing"}
 
 
 def ranges_from_capabilities(data: Any) -> dict[str, tuple[int, ...]]:
     """The values the car's capability list accepts remotely, within what this library sends.
 
-    Takes the response of ``GacClient.get_control_capabilities``. Keys:
-    ``fan_speeds`` (manual blower speeds; off is its own command), ``blowing_modes``
-    (raw outlet codes) and ``seat_<n>_ventilation_levels`` (strengths; 0 is off and
-    always allowed). An empty tuple means the list offers no remote choice; a key is
-    left out when the list does not say. Returns {} for a response too small to rely on.
-    An Aion UT lists fan speeds 1–7 (its console has ten), outlets 1–4 and front-seat
-    levels 1–3, and remote trials matched each.
+    Takes the response of ``GacClient.get_control_capabilities``. Choices, as tuples of codes
+    or levels: ``fan_speeds`` (manual blower speeds; off is its own command),
+    ``blowing_modes`` (outlet codes), ``cycling_modes`` (air-source codes),
+    ``seat_<n>_ventilation_levels`` (strengths; 0 is off and always allowed),
+    ``battery_precondition_modes`` (0 cancel, 1 start) and ``fridge_modes`` (working-mode
+    codes). Spans, as (lowest, highest) whole numbers: ``ac_temperature_range`` (°C),
+    ``ac_minutes_range`` and ``fridge_<mode>_temperature_range`` (°C).
+
+    An empty tuple means the list offers no remote choice. A key is left out when the
+    list does not say, including for a switched-off group, whose values are template
+    defaults. Returns {} for a response too small to rely on. An Aion UT lists fan speeds
+    1–7 (its console has ten), outlets 1–4, front-seat levels 1–3 and 18–32 °C, and remote
+    trials matched each.
     """
     if (remote := _remote_groups(data)) is None:
         return {}
     air = _available(remote, "airConditionCapabilities")
+    fridge = _available(remote, "refrigeratorCapabilities")
     ranges = {
         "fan_speeds": _choices(air, "windStrengthCapability",
                                _between("minWindStrength", "maxWindStrength", FAN_SPEEDS)),
-        "blowing_modes": _choices(air, "blowingModeCapability", _blowing_modes),
+        # An Aion UT also lists outlet 0, whose meaning is unknown.
+        "blowing_modes": _choices(air, "blowingModeCapability", _codes("supportBlowingModes")),
+        "cycling_modes": _choices(air, "cyclingModeCapability", _codes("supportCyclingModes")),
+        "ac_temperature_range": _choices(air, "temperatureCapability",
+                                         _span("minTemperature", "maxTemperature", CLIMATE_TEMP_RANGE)),
+        # In seconds: an Aion UT lists 60–3600, the app's 1–60 minutes.
+        "ac_minutes_range": _choices(air, "airConditionDurationCapability", _span(
+            "minAirConditionCurrentDuration", "maxAirConditionCurrentDuration", CLIMATE_MINUTES_RANGE, per=60)),
+        "battery_precondition_modes": _choices(
+            _available(remote, "batteryPretreatmentCapabilities"), "batteryPretreatmentModeCapability",
+            _codes("supportBatteryPretreatmentModes", (0, 1))),
+        "fridge_modes": _choices(fridge, "refrigeratorCapability", _codes("workingMode", tuple(FRIDGE_MODES.values()))),
+        **{f"fridge_{mode}_temperature_range": _choices(fridge, "refrigeratorCapability", _span(
+            f"min{name}Temperature", f"max{name}Temperature", FRIDGE_TEMP_RANGE[mode]))
+           for mode, name in _FRIDGE_FIELDS.items()},
     }
     seat_levels = _between("minWindStrength", "maxWindStrength", SEAT_VENTILATION_LEVELS)
     for seat in range(1, 5):
