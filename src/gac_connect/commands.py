@@ -104,7 +104,8 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     # The app's vehicle-shutdown branch is separate from its engine start/stop commands.
     Command("vehicle-power-off", _p("power/off"), "flat", category="power",
             description="vehicle shutdown (GAC 2.0.32)"),
-    Command("powerkeep-stop", _p("stop/powerKeep"), "flat", stable=True, category="power", description="stop power-keep"),
+    # HTTP 404 on the SEA gateway (Aion UT, Thailand): Power Hold is stopped from the console.
+    Command("powerkeep-stop", _p("stop/powerKeep"), "flat", category="power", description="stop power-keep"),
     # GAC 2.0.32 selects ventilation with enableWind=1; strength 0 switches it off.
     # Leave temperature fields absent so a seat command does not change cabin A/C.
     *(Command(f"seat-{seat}-ventilation-{direction}", _p("control_seat_temperature"), "seat",
