@@ -1,447 +1,262 @@
 # GAC Connect
 
-> **⚠️ BETA — not fully tested, use entirely at your own risk.** This is an
-> unofficial client with no relationship to GAC. Expect bugs; things that
-> worked yesterday may not work tomorrow. Remote commands physically act on your
-> vehicle (A/C, locks, windows, tailgate, charging) and may misbehave or fail;
-> using it alongside the official app may sign one of them out. Nothing here is
-> warranted to work, keep working, or be safe. Review what an automation can do
-> before you let it touch the car.
+> **Beta. Use at your own risk.** Remote commands physically act on your vehicle
+> (A/C, locks, windows, boot, charging).
+>
+> Not affiliated with, endorsed by or supported by GAC. GAC and AION are trademarks
+> of their respective owners. Use it with a vehicle you own, on your own account.
 
-An unofficial async Python client for **GAC / Aion international** connected-car
-accounts — read your vehicle's status and control charging from your own code.
-
-> This project is not affiliated with, endorsed by, or supported by GAC or its
-> affiliates. GAC and AION are third-party trademarks of their respective
-> owners. Use it with a vehicle you own, on your own account.
-
-Confirmed against **Australia and New Zealand**. Every other country the service
-supports is in the region table too, listed but not yet tested — see
-[Regions](#regions). Reports welcome.
+An unofficial async Python client for **GAC / AION international** connected-car
+accounts: read vehicle status, control climate, seats, locks, windows, boot and
+charging, and receive command results.
 
 ## Install
 
-These examples describe this source checkout, including unreleased audit fixes.
-From the repository root, install it into an isolated Python environment:
-
 ```bash
-python -m pip install .          # library from this checkout
-python -m pip install '.[cli]'   # + the `gac` command
+pip install gac-connect          # library
+pip install "gac-connect[cli]"   # library and the `gac` command
 ```
 
-The published beta used by the Home Assistant integration is installed with
-`python -m pip install 'gac-connect==0.4.0b1'` (or
-`'gac-connect[cli]==0.4.0b1'`). It does not include the fixes in this checkout.
-An unqualified `pip install gac-connect` selects a stable release rather than
-opting into betas. Publishing a new library version and changing Home Assistant's
-dependency pin are separate release steps; neither happens by editing this folder.
+Requires Python 3.11 or newer.
 
-## Library
-
-Phone numbers may be local, or international with an explicit `+` or `00`
-prefix matching the selected region. Spaces, hyphens and parentheses are accepted.
-Bare local numbers beginning with `61` retain those digits.
+## Quick start
 
 ```python
 import aiohttp
-from gac_connect.client import GacClient  # also works with the published beta
+from gac_connect import GacClient
+from gac_connect.session import FileStore
 
 async def main():
     async with aiohttp.ClientSession() as http:
-        client = GacClient("AU", http)
+        client = GacClient("AU", http, FileStore("~/.config/gac-connect/session.json"))
+        await client.load()
 
-        # First run: sign in. You solve a slide puzzle and enter an SMS code.
+        # First run only: solve the slide puzzle, then enter the SMS code.
         captcha = await client.start_captcha()
-        # ... show captcha.background / captcha.piece, get the slide offset x ...
+        # show captcha.background and captcha.piece (base64 PNGs); get the slide offset x
         await client.request_sms("04xxxxxxxx", x)
         await client.login_sms("04xxxxxxxx", "123456")
 
-        vehicles = await client.list_vehicles()
-        status = await client.get_status(vehicles[0].vin)
+        vehicle = (await client.list_vehicles())[0]
+        status = await client.get_status(vehicle.vin)
         print(status.soc, status.range_km, status.odometer_km)
 
-        # Optional: choose an explicit daily charging window.
-        await client.set_charge_window(vehicles[0].vin, "23:00", "05:00")
+        await client.lock(vehicle.vin)
 ```
 
-Pass a `TokenStore` to persist the session (the refresh token is single-use and
-rotates on every refresh, so persistence matters):
+## Sessions
 
-```python
-from gac_connect.session import FileStore
-client = GacClient("AU", http, FileStore("~/.config/gac-connect/session.json"))
-await client.load()
-```
-
-## Charging reports and additional telemetry
-
-Charging reports may use Unix milliseconds rather than milliseconds-of-day.
-The decoder prefers valid `startTime` / `stopTime` calendar fields and can read
-timestamp-only reports when `timezoneAccessor` supplies a time zone. A disagreement
-between those clocks is exposed as `charge_clock_consistent=False`; no clock is
-silently shifted to hide it. `charge_end_type` reports the stopping rule, while
-the target battery percentage is still unavailable.
-
-After `get_status(vin)`, `set_charge_window` uses that vehicle's reported time
-representation. Timestamp requests keep their numeric timestamps and calendar
-fields consistent in the configured scheduling zone. Legacy vehicles keep
-milliseconds-of-day. This corrects a payload-format mismatch; real acceptance
-and execution on each vehicle still need confirmation.
-
-`status.seats` contains four stable API seat IDs with ventilation on/off, wind
-strength and reported heating strength/mode. A zero reading does not prove a
-physical seat feature is fitted. The library currently has no verified seat
-on/off command or dedicated cabin-heating command; cabin A/C remains auto mode.
-Additional read-only fields include outside temperature, A/C fan strength,
-auto/compressor state, airflow/recirculation codes and anti-theft enabled state.
-Phone accessor records and alarm history do not establish callable phone actions
-or a currently active theft alarm.
+- Pass a `TokenStore` to keep the session between runs: `FileStore(path)` or your
+  own object with `load()` and `save(session)`. The default `MemoryStore` lasts one
+  process.
+- Each refresh replaces the refresh token, and `save` must persist it before the
+  next request. Give every client its own sign-in: two clients sharing one stored
+  session sign each other out.
+- Signing in signs the official app out once. Sign the app back in and both keep
+  working.
+- If the vehicle session ends, it is renewed from the saved account session. If
+  that fails, `AuthExpiredError` is raised and a new sign-in is needed.
 
 ## CLI
 
-The browser puzzle labels its slider and announces verification status. Focus
-the slider to adjust it with arrow keys. The service still requires a visual
-puzzle; a nonvisual verification alternative has not been established.
-
 ```bash
-gac login --mobile 04xxxxxxxx     # opens a browser puzzle, then asks for the SMS code
+gac login --mobile 04xxxxxxxx --region AU   # opens the puzzle in a browser, then asks for the SMS code
 gac vehicles
 gac status <VIN>
-gac charge <VIN> now              # unrestricted charging when plugged in
+gac charge <VIN> now [--timezone Australia/Sydney]
 ```
 
-## What you can read
+The session is kept in `~/.config/gac-connect/session.json`.
 
-State of charge, range, odometer, charging state and mode, plugged-in, cabin
-temperature, 12 V battery, GPS, doors / windows / boot / lock state, per-tyre
-pressure (in kPa) and temperature, and, where fitted, the fridge's mode, target
-temperature and keep-running setting (`status.fridge_mode`, `status.fridge_temp_c`,
-`status.fridge_keep_mode`, `status.fridge_keep_minutes`).
+## API
 
-`status.power_on` decodes `powerAccessors[0].powerMode`: `2` is on and `0` is
-off, verified against paired Aion UT reports. Other codes and missing readings
-remain `None`; `status.power_mode` retains the valid raw integer. This reading
-is independent of cloud connectivity (`status.online`) and cabin A/C.
+### GacClient
 
-For model-aware lock decoding, pass `model="Aion UT"` to
-`VehicleStatus.from_results(...)`, or use `gac_connect.models.doors_locked(status, model)`.
-The verified UT pattern (front doors locked, both rear lock readings `-1`) is
-recognized only for an explicitly selected UT; other incomplete reports stay unknown.
+`GacClient(region, http, store=None, *, material=None, limiter=None, timezone=None)`
 
-Telemetry keeps unknown values as `None`: a group is closed/locked only when its
-readings establish that state. Malformed fields do not discard unrelated readings.
-`status.tyres` has four stable API-ID slots; `Tyre.position` is `"1"` through `"4"`,
-not an unverified physical corner. Duplicate IDs and paired unreported `-1`
-pressure/temperature values remain unknown. The original report is retained in `raw`.
+- `region`: ISO country code (see [Regions](#regions)).
+- `http`: an `aiohttp.ClientSession`.
+- `timezone`: IANA zone for charge windows; defaults to the region's zone.
 
-## Fridge
+All methods are coroutines unless noted. `vin` is the vehicle's VIN.
 
-On cars with a fridge / warmer box:
+**Sign-in and account**
 
-```python
-await client.fridge_on(vin, mode="refrigerate", temperature=3)   # 0 to 20 °C
-await client.fridge_on(vin, mode="heat", temperature=42)         # 35 to 50 °C
-await client.fridge_on(vin, mode="freeze", temperature=-12)      # -15 to -1 °C
-await client.fridge_off(vin)
-```
+| Method | Description |
+|---|---|
+| `load()` | Load the stored session. |
+| `start_captcha()` | Start sign-in; returns a `Captcha` (`background`, `piece`, `width`, `height`, `piece_width`). |
+| `request_sms(mobile, x)` | Submit the puzzle offset `x`; sends the SMS code. |
+| `login_sms(mobile, code)` | Finish sign-in with the SMS code. |
+| `list_vehicles()` | Vehicles on the account: `Vehicle` (`vin`, `plate`, `model`, `color`, `default`). |
+| `session` | The current `Session` (property). |
 
-Each temperature is checked against the mode's range, then rounded to a whole
-degree; bad values raise `ValueError` before anything is sent. Without a
-temperature, this library's default for the mode is sent (refrigerate 3, heat 42,
-freeze -12 °C), which also resets the target if the fridge is already running.
-Calling `fridge_on` while the fridge runs changes its mode or temperature.
+**Reading**
 
-An accepted request is not proof the car applied it; check `status.fridge_mode`.
+| Method | Description |
+|---|---|
+| `get_status(vin)` | Full status as a `VehicleStatus`. |
+| `get_position(vin)` | Raw position record. |
+| `get_control_capabilities(vin)` | Raw capability metadata. |
 
-How long the fridge keeps running after you leave the car is a setting in the car.
-`status.fridge_keep_mode` reports it as `"timed"` or `"unlimited"`. For a timed
-setting, `status.fridge_keep_minutes` reports the remaining minutes supplied by the
-service, which count down once you leave the car, or `None` when unavailable or
-invalid. It is always `None` for unlimited or unknown settings.
+**Climate and seats**
 
-## Command results
+| Method | Description |
+|---|---|
+| `climate_on(vin, *, temperature=24.0, minutes=30)` | A/C in Auto at a target (18–32 °C) for 5–60 minutes. |
+| `climate_manual_on(vin, *, temperature=24.0, minutes=30, fan_speed=None, blowing_mode=None, cycling_mode=None, compressor=True)` | Manual A/C. `fan_speed` 1–10; `blowing_mode` outlet code; `cycling_mode` 1 recirculate, 2 fresh air; `compressor=False` runs the blower only. Omitted settings are kept. |
+| `climate_set_temperature(vin, temperature)` | Change the target of a running A/C. |
+| `climate_off(vin)` | A/C off. |
+| `set_seat_ventilation(vin, seat, enabled)` | Seat 1–4 ventilation on or off. |
+| `set_seat_ventilation_level(vin, seat, level)` | Seat ventilation level 0 (off) to 3. |
+| `fridge_on(vin, *, mode="refrigerate", temperature=None)` | Fridge mode `refrigerate` (0–20 °C), `heat` (35–50 °C) or `freeze` (−15 to −1 °C). |
+| `fridge_off(vin)` | Fridge off. |
 
-`PushClient` requires a TLS broker by default. `allow_plaintext=True` explicitly
-permits transmitting broker credentials without TLS, exposing them and command
-results to network interception. When a decryptor is supplied, unencrypted or
-undecryptable messages produce unknown outcomes. Envelope encryption alone does
-not authenticate the sender; use TLS for transport integrity.
+**Body**
 
-Commands are accepted asynchronously and their results are delivered by the
-service over a separate channel. `PushClient` keeps that channel open and hands
-each result (outcome, command event, session id) to your handler:
+| Method | Description |
+|---|---|
+| `lock(vin)` | Lock the doors. |
+| `unlock(vin)` | Unlock the doors (no PIN). |
+
+**Charging**
+
+| Method | Description |
+|---|---|
+| `charge_now(vin, *, until_soc=False)` | Charge whenever plugged in. |
+| `set_charge_window(vin, start, stop, *, weekly=0, until_soc=False)` | Charge between `start` and `stop` (`"HH:MM"`). `weekly`: Mon=1 … Sun=64, 127 every day, 0 once. |
+| `resume_schedule(vin, *, until_soc=None)` | Return to the charge window the car last reported. |
+| `charge_pause(vin)` | Unavailable; raises `CommandError`. |
+
+`until_soc=True` stops at the car's own target charge level instead of the stop
+time; some cars refuse it.
+
+**Any command**
+
+`command(vin, name, **overrides)` sends a command by name. Overrides replace fields
+in the request; invalid values raise `ValueError` before anything is sent.
+
+| Name | Action |
+|---|---|
+| `aircon-on`, `aircon-manual-on`, `aircon-off`, `aircon-temperature` | A/C (see the climate methods). |
+| `ventilate-on`, `ventilate-off` | Cabin ventilation. |
+| `steering-on`, `steering-off` | Steering wheel heat. |
+| `seat-1-ventilation-on` … `seat-4-ventilation-off` | Seat ventilation; `windStrength` 1–3. |
+| `antivirus-on`, `antivirus-off` | Cabin sterilisation. |
+| `fridge-on`, `fridge-off` | Fridge. |
+| `lock`, `unlock` | Doors. |
+| `window-open`, `window-close` | Windows. |
+| `sunroof-open`, `sunroof-close` | Sunroof. |
+| `tailgate-open`, `tailgate-close` | Boot. |
+| `flash-on`, `flash-off` | Lights. |
+| `horn-on`, `horn-off` | Horn. |
+| `charge-schedule` | Charge reservation. |
+| `battery-precondition`, `battery-precondition-off` | Battery preconditioning. |
+| `vehicle-power-off` | Switch the car off (no overrides). |
+| `powerkeep-stop` | Stop power keep. |
+| `power-on`, `power-off`, `charger-unlock` | Need a PIN; raise `PinRequiredError`. |
+
+Commands return once the service accepts them; the car applies them shortly after.
+Use `command_session_id(response)` to match a response with its push result.
+
+### VehicleStatus
+
+`None` means not reported. `raw` holds the full report.
+
+| Field | Description |
+|---|---|
+| `online`, `updated_ms` | Connected; time of the car's report (ms). |
+| `power_on`, `power_mode` | Car switched on; raw power mode. |
+| `soc`, `range_km`, `odometer_km` | State of charge (%), range, odometer. |
+| `charging`, `plugged_in`, `charger_locked` | Charging state. |
+| `charge_current_a`, `charge_voltage_v`, `charge_power_kw`, `estimated_charge_minutes` | Charging figures. |
+| `charging_mode` | `ChargingMode.FREE`, `SCHEDULED` (once), `LOOP` (repeating) or `UNKNOWN`. |
+| `charge_window_start`, `charge_window_stop`, `charge_weekly`, `charge_end_type` | Reported charge window. |
+| `cabin_temp_c`, `outside_temp_c`, `pm25`, `aux_voltage` | Cabin and outside temperature, cabin PM2.5, 12 V battery. |
+| `latitude`, `longitude` | Position. |
+| `locked`, `door_open`, `window_open`, `hatch_open`, `sunroof_open` | Body state. |
+| `ac_on`, `ac_target_temp_c`, `ac_fan_strength`, `ac_auto_on`, `ac_compressor_on`, `ac_blowing_mode`, `ac_cycling_mode` | Climate. |
+| `seats` | `Seat` list: `position` (1–4), `ventilation_on`, `ventilation_strength`, `heating_strength`. |
+| `tyres` | `Tyre` list: `position` (1–4), `pressure_kpa`, `temperature_c`. |
+| `steering_heat_on`, `lights_on`, `anti_theft_on` | Steering heat, lights, alarm. |
+| `battery_precondition_on`, `battery_precondition_mode`, `battery_precondition_status` | Battery preconditioning. |
+| `fridge_fitted`, `fridge_mode`, `fridge_temp_c`, `fridge_keep_mode`, `fridge_keep_minutes` | Fridge; keep mode `timed` or `unlimited`. |
+
+`decode_status(results)` builds a `VehicleStatus` from a raw report.
+`doors_locked(status, model)` reads the lock state with model-specific rules.
+
+### Push results
+
+Command results arrive on the service's push channel:
 
 ```python
 from gac_connect import PushClient
 
 def on_result(topic, payload, result):
-    print(result.event, result.ok, result.session_id)
+    print(result.event, result.ok, result.code, result.reason)
 
-# The service's broker may be plain TCP; its credentials are short-lived, but
-# you must opt in to sending them unencrypted.
-push = PushClient(client.mqtt_info, on_result, decrypt=client.decrypt_push, allow_plaintext=True)
-task = asyncio.create_task(push.run())   # reconnects on its own until stop()
+push = PushClient(client.mqtt_info, on_result, decrypt=client.decrypt_push)
+task = asyncio.create_task(push.run())   # reconnects until stop()
 ...
 push.stop()
 await task
 ```
 
+`PushResult` fields: `ok` (`True` applied, `False` refused, `None` unknown), `code`,
+`reason`, `message`, `event`, `session_id`, `vin`, `data`. Some regions' brokers
+are unencrypted; pass `allow_plaintext=True` to connect to them.
+
+### Errors
+
+All derive from `GacError`.
+
+| Error | Raised when |
+|---|---|
+| `AuthExpiredError` | The session has ended and cannot be renewed; sign in again. |
+| `CaptchaError`, `LoginError` | Sign-in failed. |
+| `CommandError` | The service refused a command; `code` and `reason` say why. |
+| `PinRequiredError` | The command needs a PIN. |
+| `RateLimitedError` | A request limit was reached; `retry_after` in seconds. Nothing was sent. |
+| `RegionError` | Unknown region. |
+| `ResponseError` | Network failure or unexpected response. |
+
+### Helpers
+
+| Name | Description |
+|---|---|
+| `validate_clock(value)` | Check an `"HH:MM"` time. |
+| `validate_weekly(value)` | Check a day bitmask (0–127). |
+| `window_operation(start, stop, tz, *, weekly=0, until_soc=False)` | The charge-window request body. |
+| `local_mobile(value, country_tel)` | A mobile number in national format. |
+| `Capabilities`, `Support` | Equipment detection from status reports. |
+
 ## Regions
 
-Custom `Material` still accepts the original five constructor arguments. When
-`iov_response` is omitted (or `None`), gateway responses and push messages use
-the `iov` keypair. An explicit response keypair remains separate from the request
-keypair, as required by the UK profile.
+`gac_connect.const.REGIONS` maps 56 country codes to their service hosts,
+calling code and time zone.
 
-`GacClient(region, ...)` takes an ISO country code. The table in
-`gac_connect.const.REGIONS` covers all 56 countries the service is configured
-for, with the two hosts, calling code and time zone each one uses:
-
-```python
-from gac_connect.const import CONFIRMED_REGIONS, LISTED_REGIONS, REGIONS
-
-REGIONS["IL"]        # {'main': 'nl-app-api...', 'iov': 'eu-iov-sdk-access...', 'tel': '+972', ...}
-sorted(LISTED_REGIONS)     # the 21 the app offers in its own country picker
-sorted(CONFIRMED_REGIONS)  # the ones this library has actually signed in to
-```
-
-Three tiers, narrowest first:
-
-- **Confirmed** (`AU`, `NZ`) — signed in and driven a car with.
-- **Listed** — the app's own country picker offers them, so accounts exist:
-  `AE AU BR ES FI GR HK ID IL KH KW MO MX NZ PH PL PT RU SA SG TH`. `IL` has a
-  second-hand report of working; it stays out of the confirmed set until someone
-  says so first-hand.
-- **The rest** — wired into the build ahead of sale. The hosts are right; whether
-  there is an account behind them is another matter.
-
-Within the GAC International app nothing is region-specific — same keys, same
-signing, same endpoints — so a region there is only ever the four values above.
-If one does not work, it is worth a report.
-
-Some markets are served by a **separate app on a separate backend with its own
-keys**. The library reaches them through a per-region "profile" (see
-`PROFILE_MATERIAL` in `const.py`):
-
-- **United Kingdom** — AION Auto UK (`app-api.aionauto.co.uk`) is its own
-  platform, served by the My AION app with its own key material and its own IoV
-  app id (3). `region="GB"` selects that profile: it
-  targets `app-api.aionauto.co.uk`, signs IoV requests with the My AION HMAC
-  secret, encrypts them with the My AION request key, and decrypts responses
-  with the My AION response key. UK sign-in is still awaiting end-to-end
-  confirmation from a UK user.
-- **Mainland China** — the domestic Aion app is a separate build too; not
-  supported.
-
-The table carries one time zone per country, which is a guess wherever a country
-spans several (RU, BR, MX, ID, AU, ES, PT, CL). Charge windows are set in local
-clock time, so give the car's own zone when the default is not it:
-
-```python
-client = GacClient("RU", http, timezone="Asia/Vladivostok")   # gac charge ... --timezone
-```
-
-## Sharing a session
-
-The IoV refresh token is **single-use**: each refresh mints a replacement and
-retires the one it was given. A session is therefore a chain, and only one holder
-can advance it. Two things working through the same saved session will spend each
-other's tokens, and whichever refreshes second is told its token was already used
-and has to sign in again.
-
-So give each client its own sign-in. Two Home Assistant entries pointed at one
-stored session, the CLI sharing a session file with Home Assistant, or a session
-copied between machines will all fail this way, intermittently and confusingly.
-The same applies if a rotation is not saved: `TokenStore.save` is called on every
-rotation and must durably persist before the next request, which is why the
-default `MemoryStore` is only suitable for a single short-lived process.
-
-Temporary HTTP errors or incomplete refresh responses retain the saved credentials
-and raise a retryable library error. Only an expired refresh token or an explicit
-spent-token rejection requires signing in again.
-
-### Running alongside the official app
-
-Signing in here can sign the phone app out. The client attempts an account-token
-rotation after creating the vehicle session so later app sign-ins can coexist.
-If that optional step fails, vehicle sign-in still succeeds and logs a warning;
-a later app sign-in may end that session. Behavior remains region-dependent.
-
-Signing in mints two things: an account session on the main API and a vehicle
-session on the IoV gateway. The account is allowed one current account session,
-so a sign-in anywhere replaces the last one — that is what logs the phone app out
-when this library signs in, and the app does the same to this library when it
-signs back in.
-
-A vehicle session is ended along with the account token that minted it, unless
-that token has since been refreshed. So straight after minting the vehicle
-session, sign-in refreshes the account token once, as the app itself routinely
-does. After a successful rotation, this has allowed the vehicle session to outlive
-later app sign-ins in tested regions. It is not a guarantee for every backend.
-
-Versions before 0.3.0b1 skipped that step, so a session they minted was ended by
-the next app sign-in — in Home Assistant, a re-authentication followed by signing
-back in on the phone signed the integration out again. Re-authenticate once on
-0.3.0b1 or later to replace such a session.
-
-## Cabin and seat controls
-
-`set_seat_ventilation(vin, seat, enabled)` toggles one fitted seat without changing
-seat heating or cabin A/C settings. IDs follow GAC Android 2.0.32: driver=1, front
-passenger=2, rear left=3, rear right=4. The on/off request uses
-`control_seat_temperature`, an identifier with `grade=2` and `duration=30`, and
-one operation with `enableWind=1` and `windStrength=1` (on) or `0` (off).
-Temperature fields are omitted. A zero strength is decoded as off even when the
-enable flag remains set. Request acceptance is not confirmation of execution.
-The request format was traced in the app; vehicle/trim support needs a real
-command result. Off placeholder telemetry alone does not establish that support.
-
-The app's cabin Heating and Cooling shortcuts set automatic A/C to the maximum
-or minimum temperature. Consumers can use `climate_on` at 32 or 18 °C for those
-shortcuts; the library does not claim a separate heat-only mode.
-
-`climate_on(vin, temperature=24, minutes=30)` uses the app's open request:
-`identifier` contains the VIN, `grade=2` and the requested `duration`; its
-operation contains Auto, temperature and Celsius units. `climate_off(vin)` uses
-`air_condition/close` with a flat VIN and `operations=[{"enableAutoMode":0}]`.
-Neither command sends the old `airOperationType` marker or -1 airflow fields.
-
-`climate_manual_on(vin, temperature=24, minutes=30, fan_speed=None)` uses the
-same timed open envelope, with `enableAutoMode=0` and `enableAirCompressor=1`.
-With no fan speed it omits `windStrength`, preserving the existing manual blower
-and outlets on the tested Aion UT. An integer `fan_speed` from 1 to 10 is accepted
-by the raw request serializer and starts or renews the timed run at the supplied
-temperature; the vehicle cloud may accept a smaller range. The UT capability
-read advertises a maximum of 7. The user confirmed remote changes from 3 to 6
-and speed 7, while 8–10 were rejected with an unsupported-strength response
-(gateway code 13002). The HA integration therefore offers 1–7, preserving
-console reports up to 10. Airflow fields remain absent; other models remain best-effort.
-Use `climate_off` for Off. These operations never retry as an automatic start.
-
-An optional `blowing_mode` positive integer adds the raw `blowingMode` outlet
-field to `climate_manual_on`, leaving blower and recirculation fields absent
-unless separately selected. On the user's UT, console changes established
-1=cabin, 2=cabin+feet, 3=feet, 5=windscreen and 7=all three. Remote requests for
-codes 1–4 were physically confirmed with the car fully on (ready to drive);
-code 4 selected feet + windscreen. Before switching to ready, code 3 had no
-effect. Code 5 was rejected with gateway code 13002 even in the ready state.
-Code 7 has only been observed from console selections; it is not a verified
-remote control. Selecting an outlet uses the full timed start and renews the
-run at the supplied temperature. Other vehicles remain best-effort.
-
-`get_control_capabilities(vin)` reads the app's capability endpoint and returns
-its raw data object. The path is `/iov-vehicle-gateway/v1/iov/vehicle/access_gateway/get_capability`,
-with a flat VIN body; it is a read, not a vehicle control. The app parses the
-first `capabilities` record's `capability.remoteCapability` lists, including
-`airConditionCapabilities` and `seatTemperatureCapabilities`. These contain
-fields such as `supportBlowingModes` and `enableFrontDefrosterCapability`.
-Their numeric flags are uncalibrated and do not automatically enable controls
-or prove that a command will work. The query is optional, not part of polling.
-The capability read recognizes the app's normal success codes (including `0`),
-without requiring the main API's `success` boolean. Async control-result codes
-are not accepted as metadata-read success. Rejections show a bounded result
-code, without copying API messages, credentials or response data into errors.
-
-`Seat.ventilation_enable_code` preserves raw `enableWind`, including unknown
-values, for comparing console modes. There is no verified Smart-seat code or
-remote Smart operation. `ventilation_on` keeps its existing calibrated decoding.
-
-`climate_set_temperature(vin, temperature)` is a separate best-effort partial
-adjustment for running A/C. It sends only temperature and units, with VIN and
-grade in the identifier. It omits Auto, fan speed, airflow, compressor and
-duration; it never falls back to a full automatic start. This partial request
-was physically confirmed on an Aion UT; other models remain best-effort.
-
-## Charging control
-
-`charge_now` and `set_charge_window` control the car's charging schedule.
-The car applies commands asynchronously; acceptance does not confirm execution.
-Continuous pause is unavailable: `charge_pause`, `pause_operation` and CLI
-`gac charge <VIN> pause` raise an error without sending a request. The previous
-operation allowed charging every day from 03:00 to 03:30 and was not a true stop.
-
-Windows require distinct `HH:MM` times. Their stop follows the next selected start,
-including overnight. `weekly` is a whole-number mask from 0 to 127 (Monday=1,
-Sunday=64, 0=every day); the start date honors that mask in the configured zone.
+- `LISTED_REGIONS`: the 21 countries offered in the GAC International app:
+  `AE AU BR ES FI GR HK ID IL KH KW MO MX NZ PH PL PT RU SA SG TH`.
+- `GB` uses the My AION app's own service and keys.
+- Countries that span several time zones (for example AU, BR, MX, RU) use one
+  default zone; pass `timezone=` for the car's own.
 
 ## Request limits
 
-Every request the library sends passes one limiter shared by all clients in the
-process (`gac_connect.DEFAULT_LIMITER`); a client given its own `Limiter` is held
-to both, so creating clients never resets the limits. Requests go out one at a
-time, even across threads, at least a second apart, and no more than 20 a minute,
-240 an hour and 3000 a day (`const.REQUEST_BUDGETS`, rolling windows, each
-request counted when it finishes). Vehicle commands also have their own budget of
-6 a minute and 60 an hour (`const.COMMAND_BUDGETS`). If the service answers "too
-many requests", nothing is sent for at least 60 seconds, or for its `Retry-After`
-(seconds or a date) up to a day. Past any of these the client raises
-`RateLimitedError` (with `retry_after` in seconds) without sending anything.
+All clients in a process share one limiter (`DEFAULT_LIMITER`):
 
-The shared limiter keeps its state in a small file, locked while each request
-runs, so every program and every run on the machine shares one budget and one
-pause: a script restarted in a loop is limited like one that keeps running. The
-file lives in your cache folder (`~/.cache/gac-connect/limits.json` on Linux,
-`~/Library/Caches/gac-connect/` on macOS, `%LOCALAPPDATA%\gac-connect\` on
-Windows) or wherever `GAC_CONNECT_LIMITS` points. If it cannot be read or written,
-nothing is sent. If it is corrupt, a copy is kept (`limits.corrupt`) and requests
-pause for a day, since any pause recorded in it is unknown; delete the file to reset
-it sooner. A host that stores the state itself can set
-`DEFAULT_LIMITER.state_path = None` before its first request and use
-`export_state()` / `import_state()` instead (the Home Assistant integration does).
+- one request at a time, at least 1 s apart;
+- at most 20 a minute, 240 an hour and 3000 a day (`const.REQUEST_BUDGETS`);
+- commands: at most 6 a minute and 60 an hour (`const.COMMAND_BUDGETS`);
+- after a "too many requests" answer, nothing is sent for at least 60 s, or the
+  service's `Retry-After` up to a day.
 
-What is counted: requests this library sends on one machine. Other machines, the
-official app, and the push channel's broker connection are not counted. A poll
-every few minutes is plenty for most uses.
-
-## Notes and limits
-
-- Sign-in needs a human: a slide puzzle and an SMS code. There is no headless login.
-- Door locking and unlocking are available. Door unlock does not require a PIN:
-  use `await client.unlock(vin)` or `await client.command(vin, "unlock")`.
-  Engine start/stop (`power-on` / `power-off`) and charger-release remain
-  PIN-gated and are refused by this client.
-- `await client.command(vin, "vehicle-power-off")` uses the separate GAC 2.0.32
-  shutdown path `power/off` with only the VIN. It is best-effort and has not been
-  tested through this client on a vehicle. The user confirmed the app's shutdown
-  prompt works without requesting a PIN. This does not establish support on other
-  models or accounts. Consumers should require an explicit shutdown opt-in and
-  confirm the result from fresh `status.power_on` telemetry. No vehicle-power-on
-  control has been verified for the Aion UT.
-- Using the official app and this client on the same account at the same time can
-  occasionally sign one of them out.
-
-## Home Assistant
-
-A Home Assistant integration built on this library is available separately.
-
-`Capabilities(model)` provides passive equipment discovery. Pass decoded reports
-to `observe(status)` and inspect `feature(name)` or `command(name)` for supported,
-unsupported or unknown, with an evidence source. Missing reports do not erase
-positive evidence. UT equipment assumptions are defaults that positive variant
-evidence can correct. Pressure and temperature are tracked independently for each
-tyre. Reading a feature does not establish remote-command support: call
-`confirm_command(name)` only for a successfully applied, correlated user command,
-not its initial acceptance. Opening/closing and on/off are tracked separately.
-
-The detector performs no network requests. The optional raw capability query is
-separate: its numeric flags are not interpreted as equipment evidence.
-`observe_equipment` accepts explicit, validated flags supplied by a caller.
-Consumers own manual overrides and can persist the names-only `export_state()`
-snapshot, then `restore()` it for the same vehicle. Snapshots contain no raw
-telemetry, vehicle identifiers or credentials.
-
-Consumers can import `GacClient`, `PushClient`, `decode_status`, `doors_locked`,
-`local_mobile`, `validate_clock`, `validate_weekly`, `window_operation`, and
-`PAUSE_UNSUPPORTED` directly from `gac_connect`. `decode_status` is an alias for
-`VehicleStatus.from_results`, the decoder used by the client. The library owns
-HTTP/authentication behavior, command acceptance, telemetry, schedule construction,
-phone normalization, and push decoding; consumers own their UI and storage lifecycle.
-
-These public behavior exports accompany the consolidated client fixes. The HA
-integration uses their availability to select the native library implementation;
-its pinned b1 release still needs a separate compatibility adapter. Do not remove
-that adapter or change the dependency pin until a new library artifact has been
-published and tested without the adapter.
+Over a limit, `RateLimitedError` is raised without sending. The limiter's state is
+kept in a file shared by every program on the machine: `~/.cache/gac-connect/`
+(Linux), `~/Library/Caches/gac-connect/` (macOS), `%LOCALAPPDATA%\gac-connect\`
+(Windows), or `$GAC_CONNECT_LIMITS`. Delete it to reset. To keep the state
+elsewhere, set `DEFAULT_LIMITER.state_path = None` before the first request and
+use `export_state()` and `import_state()`.
 
 ## Acknowledgements
 
@@ -516,17 +331,6 @@ Thanks to their authors for showing what a good community integration looks like
 - **0.2.0b7** — fridge / warmer box: `fridge_on(mode, temperature)` and
   `fridge_off()`, with per-mode temperature ranges checked before sending, and
   the fridge's mode and target temperature in the vehicle status.
-
-## Development
-
-Use an isolated environment with `python -m pip install '.[cli,dev]'`, then run
-`python -m pytest` and `ruff check .`. Tests use synthetic responses and do not
-send commands to a vehicle. The validation workflow covers Python 3.11, 3.13 and
-3.14, includes CLI tests, and builds and installs a wheel in a fresh environment.
-Its artifact smoke test runs outside the checkout and checks public imports,
-both bundled key profiles, the typing marker, and encrypted response decoding.
-Make the workflow a required repository check before relying on it as a merge
-gate. Live regional gateway compatibility remains a separate validation step.
 
 ## License
 
