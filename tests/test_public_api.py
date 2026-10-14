@@ -28,9 +28,8 @@ def test_public_vehicle_behavior_matches_the_client_decoder():
 
 
 def test_public_schedule_helpers_share_validation_and_construction():
-    from gac_connect import PAUSE_UNSUPPORTED, validate_clock, validate_weekly, window_operation
+    from gac_connect import validate_clock, validate_weekly, window_operation
 
-    assert "Continuous charging pause is unavailable" in PAUSE_UNSUPPORTED
     assert validate_clock("23:00") == "23:00"
     assert validate_weekly(1.0) == 1
     zone = ZoneInfo("Asia/Bangkok")

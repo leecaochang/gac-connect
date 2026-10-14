@@ -45,7 +45,6 @@ def test_charging_mode_alone_reveals_the_charging_equipment(mode):
     caps.observe(VehicleStatus.from_results({"chargingAccessors": [{"chargingMode": mode}]}))
     assert caps.feature("charge_control").state is Support.SUPPORTED
     assert caps.command("charge-now").state is Support.UNKNOWN
-    assert caps.command("charge-pause").state is Support.UNSUPPORTED
 
 
 def test_model_defaults_can_be_corrected_by_positive_variant_evidence():
@@ -67,7 +66,6 @@ def test_commands_are_direction_specific_and_do_not_claim_sensor_support():
     assert caps.feature("sunroof").state is Support.SUPPORTED
     assert caps.feature("sunroof_open").state is Support.UNKNOWN
     assert not caps.confirm_command("invented-command")
-    assert caps.command("charge-pause").state is Support.UNSUPPORTED
 
 
 def test_explicit_equipment_flags_are_strict_and_override_inference():

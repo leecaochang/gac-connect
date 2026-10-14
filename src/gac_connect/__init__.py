@@ -23,7 +23,7 @@ from .limits import DEFAULT_LIMITER, Limiter
 from .models import VehicleStatus, doors_locked
 from .phone import local_mobile
 from .push import BrokerInfo, PushClient, PushResult, interpret
-from .vehicle import PAUSE_UNSUPPORTED, validate_clock, validate_weekly, window_operation
+from .vehicle import validate_clock, validate_weekly, window_operation
 
 # Public decoding entry point for consumers; use the same implementation as
 # GacClient.get_status, without a second normalization pass or client subclass.
@@ -41,7 +41,6 @@ __all__ = [
     "decode_status",
     "doors_locked",
     "local_mobile",
-    "PAUSE_UNSUPPORTED",
     "validate_clock",
     "validate_weekly",
     "window_operation",

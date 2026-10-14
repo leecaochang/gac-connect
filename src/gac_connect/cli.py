@@ -151,12 +151,9 @@ def status(vin: str, region: str = "AU") -> None:
 
 @app.command()
 def charge(vin: str, action: str, region: str = "AU", timezone: str = "") -> None:
-    """Charge control: action = now. Continuous pause is unavailable."""
-    if action == "pause":
-        from .vehicle import PAUSE_UNSUPPORTED
-        raise typer.BadParameter(PAUSE_UNSUPPORTED)
+    """Charge control: action = now. There is no pause; a charge window blocks AC charging outside it."""
     if action != "now":
-        raise typer.BadParameter("action must be now; continuous pause is unavailable")
+        raise typer.BadParameter("action must be now; there is no pause, set a charge window instead")
     async def go() -> None:
         async with aiohttp.ClientSession() as http:
             client = _client(http, region, timezone or None)

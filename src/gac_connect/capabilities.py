@@ -397,8 +397,6 @@ class Capabilities:
 
     def command(self, name: str) -> Capability:
         """Opening and closing, and on and off, need separate confirmation."""
-        if name == "charge-pause":
-            return Capability(Support.UNSUPPORTED, "no_continuous_pause")
         feature = COMMAND_FEATURES.get(name)
         if feature is None:
             return Capability(Support.UNKNOWN, "not_observed")
@@ -434,5 +432,5 @@ class Capabilities:
             "features": {name: {"state": self.feature(name).state.value, "source": self.feature(name).source}
                          for name in sorted(FEATURES)},
             "commands": {name: {"state": self.command(name).state.value, "source": self.command(name).source}
-                         for name in (*COMMAND_FEATURES, "charge-pause")},
+                         for name in COMMAND_FEATURES},
         }

@@ -5,8 +5,10 @@ The gateway has no plain "start" / "stop"; charging is gated through the schedul
 * **charge now** — ``{"chargingMode": 0}`` alone (free: charge whenever plugged
   in). The car keeps its saved window. The command returns immediately; the car
   applies it asynchronously and resuming can take several minutes.
-* **resume schedule** — the last reported window, scheduled again.
-* **pause** — unavailable until a continuous stop operation is verified.
+* **resume schedule** — the last reported window, scheduled again. This is also
+  the only pause: the app has none, and with a schedule on the car blocks AC
+  charging outside the window (DC fast charging starts regardless). A one-time
+  window far ahead is acknowledged but not kept, so there is no open-ended pause.
 * **set window** — loop mode (2) with times of day and calendar fields dated for
   the next (selected) occurrence. Selected days repeat; no days (``weekly`` 0) is
   a one-time window, which the car records as the app's "once" (mode 1). 127 is
@@ -33,7 +35,6 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .const import IOV_PREFIX, SERVICE_CLOCK
-from .errors import CommandError
 
 _RESERVATION = f"{IOV_PREFIX}/charging/reservation"
 MODE_FREE = 0
@@ -41,11 +42,6 @@ MODE_SCHEDULED = 1   # the app's "once"
 MODE_LOOP = 2        # the app's "loop"
 END_AT_TIME = 0
 END_AT_SOC = 1
-
-PAUSE_UNSUPPORTED = (
-    "Continuous charging pause is unavailable. The previous pause operation allowed "
-    "charging daily from 03:00 to 03:30. Use an explicit charge window instead."
-)
 
 
 _DAY_MS = 86_400_000
@@ -196,11 +192,6 @@ def preserved_operation(window: dict, mode: int, *, until_soc: bool | None = Non
     return _operation(window["dailyReservationStartTime"], window["dailyReservationStopTime"],
                       window["weeklyReservation"], mode, end_type,
                       start_struct=window.get("startTime"), stop_struct=window.get("stopTime"))
-
-
-def pause_operation(tz: ZoneInfo) -> dict:
-    """Reject the retired pseudo-pause; retain the API for a clear migration error."""
-    raise CommandError(PAUSE_UNSUPPORTED)
 
 
 def validate_clock(value: str) -> str:

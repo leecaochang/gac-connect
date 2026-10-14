@@ -118,9 +118,6 @@ def test_charge_operations():
     from gac_connect import vehicle
     now = vehicle.charge_now_operation()
     assert now["chargingMode"] == vehicle.MODE_FREE
-    from gac_connect.errors import CommandError
-    with pytest.raises(CommandError, match="Continuous charging pause"):
-        vehicle.pause_operation(ZoneInfo("Australia/Brisbane"))
     win = vehicle.window_operation("23:00", "05:00", ZoneInfo("Australia/Brisbane"), weekly=127)
     assert win["dailyReservationStartTime"] == (23 * 60) * 60000
 
