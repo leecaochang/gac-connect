@@ -124,12 +124,12 @@ All methods are coroutines unless noted. `vin` is the vehicle's VIN.
 | Method | Description |
 |---|---|
 | `charge_now(vin, *, until_soc=False)` | Charge whenever plugged in. |
-| `set_charge_window(vin, start, stop, *, weekly=0, until_soc=False)` | Charge between `start` and `stop` (`"HH:MM"`). `weekly`: Mon=1 … Sun=64, 127 every day, 0 once. |
+| `set_charge_window(vin, start, stop, *, weekly=0, until_soc=False)` | Charge between `start` and `stop` (`"HH:MM"`). `weekly`: Mon=1 … Sun=64, 127 every day, 0 once. A stop before the start runs overnight. |
 | `resume_schedule(vin, *, until_soc=None)` | Return to the charge window the car last reported. |
-| `charge_pause(vin)` | Unavailable; raises `CommandError`. |
 
 `until_soc=True` stops at the car's own target charge level instead of the stop
-time; some cars refuse it.
+time, like the app's "Charge cutoff SOC". No stop time is sent then (`stop` may be
+`None`), and the car keeps its saved one.
 
 **Any command**
 
@@ -229,6 +229,7 @@ All derive from `GacError`.
 | `window_operation(start, stop, tz, *, weekly=0, until_soc=False)` | The charge-window request body. |
 | `local_mobile(value, country_tel)` | A mobile number in national format. |
 | `equipment_from_capabilities(data)` | Equipment flags from a `get_control_capabilities` response. |
+| `ranges_from_capabilities(data)` | Remote choices and spans from a `get_control_capabilities` response: A/C temperature, run time, fan speeds, outlet and air-source codes, seat ventilation levels, battery preconditioning, fridge modes and temperatures. |
 | `Capabilities`, `Support` | Equipment detection from the capability list and status reports. |
 
 ## Regions
