@@ -63,6 +63,8 @@ EQUIPMENT_READINGS = {
     "ventilation": (), "horn": (), "battery_precondition": ("battery_precondition_mode",), "sterilisation": (),
     # A power reading does not establish that shutdown is remotely supported.
     "vehicle_power_control": (),
+    # Nor does a connector lock reading establish a remote unlock.
+    "charger_unlock": (),
     # Placeholder off reports do not establish that a seat can be controlled.
     **{f"seat_{i}_ventilation": () for i in range(1, 5)},
 }
@@ -77,7 +79,7 @@ COMMAND_FEATURES = {
     "tailgate-open": "tailgate", "tailgate-close": "tailgate",
     "lock": "doors", "unlock": "doors",
     "charge-now": "charge_control", "charge-resume": "charge_control", "charge-window": "charge_control",
-    "charge-schedule": "charge_control",
+    "charge-schedule": "charge_control", "charger-unlock": "charger_unlock",
     "flash-on": "lights", "flash-off": "lights",
     "ventilate-on": "ventilation", "ventilate-off": "ventilation",
     "horn-on": "horn", "horn-off": "horn", "battery-precondition": "battery_precondition",
@@ -137,6 +139,7 @@ _CAPABILITY_FEATURES: dict[str, tuple[str, str, tuple[int, ...]]] = {
     "charge_weekly": ("chargingCapabilities", "weeklyReservationCapability", _READ),
     "plugged_in": ("chargerCapability", "plugCapability", _READ),
     "charger_locked": ("chargerCapability", "lockCapability", _READ),
+    "charger_unlock": ("chargerCapability", "lockCapability", _CONTROL),
     "power_on": ("powerCapabilities", "powerCapability", _READ),
     "vehicle_power_control": ("powerCapabilities", "powerCapability", _CONTROL),
     "cabin_temp_c": ("environmentCapabilities", "temperatureInsideCarCapability", _READ),

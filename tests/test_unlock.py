@@ -30,9 +30,24 @@ def test_unlock_uses_normal_command_validation_without_a_pin(generic, response):
     http.post.assert_not_called()
 
 
-@pytest.mark.parametrize("name", ["charger-unlock", "power-on", "power-off"])
+@pytest.mark.parametrize("name", ["power-on", "power-off"])
 def test_other_pin_guards_remain_in_force(name):
     client, http, _ = make_client(Response(), valid=True)
     with pytest.raises(PinRequiredError):
         asyncio.run(client.command("VIN", name))
     http.post.assert_not_called()
+
+
+def test_the_charging_connector_unlocks_without_a_pin():
+    client, http, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value={"code": 13001})
+
+    async def run():
+        await client.load()
+        assert await client.command("VIN", "charger-unlock") == {"code": 13001}
+
+    asyncio.run(run())
+    client._iov_call.assert_awaited_once_with(
+        CATALOG["charger-unlock"].path, {"vin": "VIN"}, sensitive={"vin": "VIN"}, kind="command",
+    )
+    assert CATALOG["charger-unlock"].path.endswith("/access_gateway/charger/unlock")

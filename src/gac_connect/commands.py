@@ -91,8 +91,9 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     Command("horn-off", _p("horn/off"), "flat", category="body", description="horn off"),
     # charging & power
     Command("charge-schedule", _p("charging/reservation"), "ops", stable=True, category="charge", description="set charge schedule"),
-    Command("charger-unlock", _p("charger/unlock"), "flat", pin=True, category="charge",
-            description="release charging gun / stop charging (PIN)"),
+    # GAC 2.0.32 sends it like door unlock, with only the VIN, after a confirmation (no PIN).
+    Command("charger-unlock", _p("charger/unlock"), "flat", category="charge",
+            description="unlock the charging connector (no PIN required)"),
     Command("battery-precondition", _p("battery/pretreatment"), "ops", category="charge",
             description="battery preconditioning", ops={"batteryPretreatmentMode": 1}),
     # The app's pretreatment modes: 0 cancel, 1 immediately, 2 once, 3 loop. An Aion UT
