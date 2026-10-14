@@ -113,6 +113,47 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
       for seat in range(1, 5) for direction, strength in (("on", 1), ("off", 0))),
 ]}
 
+# What the GAC 2.0.32 app lists when the car refuses a command with 13005 ("conditions
+# not met"), chosen by its control type; the wording is this library's own. The app has
+# no specific list for charging, sunroof, steering heat or fridge commands, and leaves
+# out the range for A/C on in fuel cars.
+_STILL = "the car is not moving"
+_OFF = "the car is not moving and is switched off"
+_LOCKED = "the car is locked"
+_RANGE = "the car has enough range"
+_NOT_DRIVER_ON = "the car was not switched on from inside"
+_HAZARDS_OFF = "the hazard warning lights are off"
+_STERILISE = (_OFF, _LOCKED, "the windows and sunroof are closed", _RANGE,
+              "the car's software supports sterilisation")
+_CONDITIONS: dict[str, tuple[str, ...]] = {
+    "door/lock": (_STILL, "all doors are closed", "the bonnet and boot are closed"),
+    "door/unlock": (_STILL,),
+    "window/open": (_OFF,), "window/close": (_OFF,),
+    "ventilate_mode/open": (_OFF,), "ventilate_mode/close": (_OFF,),
+    "hatchback/open": (_STILL,), "hatchback/close": (_STILL,),
+    "horn/on": (_STILL,), "horn/off": (_STILL,),
+    "flash/on": (_STILL, _HAZARDS_OFF), "flash/off": (_STILL, _HAZARDS_OFF),
+    "charger/unlock": (_STILL,),
+    "air_condition/open": (_OFF, _LOCKED, _RANGE),
+    "air_condition/close": (_STILL,),
+    "control_air_condition_antivirus/on": _STERILISE, "control_air_condition_antivirus/off": _STERILISE,
+    "battery/pretreatment": (_OFF, _LOCKED),
+    "control_seat_temperature": (_OFF, _LOCKED, _RANGE),
+    "engine/start": (_OFF, _LOCKED, _RANGE),
+    "engine/stop": (_STILL, _NOT_DRIVER_ON),
+    "power/off": (_STILL, _NOT_DRIVER_ON),
+}
+
+
+def refusal_hint(code: object, command: str) -> str | None:
+    """The app's conditions for a 13005 refusal of a catalog command or gateway path, else None."""
+    if type(code) not in (int, str) or str(code) != "13005":
+        return None
+    cmd = CATALOG.get(command)
+    path = (cmd.path if cmd else command).rsplit("/access_gateway/", 1)[-1]
+    conditions = _CONDITIONS.get(path)
+    return f"The GAC app lists these conditions: {'; '.join(conditions)}." if conditions else None
+
 
 CLIMATE_TEMP_RANGE = (18.0, 32.0)   # °C
 

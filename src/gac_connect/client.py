@@ -588,7 +588,7 @@ class GacClient:
                       _excerpt(body, 1000).replace(vin, "<VIN>"))
         resp = await self._iov_call(path, body, sensitive={"vin": vin}, kind="command")
         try:
-            return _command_result(resp)
+            return _command_result(resp, path)
         except TokenInvalidError:
             # Never replay an action. Prepare only the next explicit attempt, and
             # do not invalidate a token another caller has already rotated.
@@ -741,7 +741,7 @@ def command_session_id(resp: Any) -> str | None:
     return normalize_id(sid)
 
 
-def _command_result(resp: Any) -> Any:
+def _command_result(resp: Any, path: str = "") -> Any:
     """13001 "ongoing" is an accepted async command; the app's success codes are accepted too."""
     if isinstance(resp, dict):
         code = resp.get("code")
@@ -754,7 +754,8 @@ def _command_result(resp: Any) -> Any:
             return resp
         reason = result_reason(code)
         detail = f"{reason} (code {code})" if reason else _msg(resp)
-        raise CommandError(f"command rejected: {detail}", code=code)
+        hint = commands.refusal_hint(code, path)
+        raise CommandError(f"command rejected: {detail}" + (f". {hint}" if hint else ""), code=code)
     raise CommandError("command response must be an object with an acceptance result")
 
 

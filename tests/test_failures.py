@@ -327,6 +327,31 @@ def test_known_refusal_codes_are_explained_without_the_api_message(code, reason)
         assert caught.value.reason is None
 
 
+
+@pytest.mark.parametrize("command,needs", [
+    ("lock", "all doors are closed"), ("unlock", "not moving"), ("window-close", "switched off"),
+    ("flash-on", "hazard warning lights are off"), ("aircon-manual-on", "enough range"),
+    ("aircon-off", "not moving"), ("seat-1-ventilation-on", "is locked"),
+    ("vehicle-power-off", "not switched on from inside"),
+])
+def test_conditions_not_met_names_the_app_conditions(command, needs):
+    from gac_connect.client import _command_result
+    from gac_connect.commands import CATALOG, refusal_hint
+    from gac_connect.errors import CommandError
+
+    assert needs in refusal_hint(13005, command) and needs in refusal_hint("13005", CATALOG[command].path)
+    with pytest.raises(CommandError) as caught:
+        _command_result({"code": 13005, "msg": "private response message"}, CATALOG[command].path)
+    assert needs in str(caught.value) and caught.value.code == "13005"
+
+
+@pytest.mark.parametrize("code,command", [(13005, "charge-now"), (13005, "sunroof-open"), (13005, "fridge-on"),
+                                          (13003, "lock"), (True, "lock"), (None, "lock")])
+def test_no_conditions_without_a_specific_app_list(code, command):
+    from gac_connect.commands import refusal_hint
+
+    assert refusal_hint(code, command) is None
+
 def test_push_details_accept_the_app_connection_names():
     client, _, _ = make_client(Response(body={"code": "0000", "data": {"connectHost": "ssl://b", "topicList": ["t"]}}),
                                valid=True)
