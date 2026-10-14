@@ -150,9 +150,12 @@ def validate_climate(temperature: Any, minutes: Any) -> tuple[float, int]:
     return round(t * 2) / 2, m
 
 
+FAN_SPEEDS = range(1, 11)   # the console's ten blower speeds; a car's remote range may be smaller
+
+
 def validate_fan_speed(speed: Any) -> int:
     """Accept the ten manual cabin blower speeds; Off uses climate_off instead."""
-    if type(speed) is not int or not 1 <= speed <= 10:
+    if type(speed) is not int or speed not in FAN_SPEEDS:
         raise ValueError("fan speed must be an integer from 1 to 10")
     return speed
 

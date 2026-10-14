@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from .commands import FAN_SPEEDS, SEAT_VENTILATION_LEVELS
+
 
 class Support(StrEnum):
     SUPPORTED = "supported"
@@ -150,17 +152,33 @@ def _level(value: Any) -> int:
     return value if type(value) is int and 0 <= value <= 3 else 0
 
 
+def _available(remote: dict, group: str, match: dict[str, Any] | None = None) -> list[dict]:
+    """The group's entries (those matching ``match``) that are switched on."""
+    return [item for item in remote.get(group) or () if isinstance(item, dict)
+            and all(item.get(key) == value for key, value in (match or {}).items())
+            and _level(item.get("controlCapability")) >= 1]
+
+
 def _flag(remote: dict, group: str, field: str, levels: tuple[int, ...],
           match: dict[str, Any] | None = None) -> bool | None:
     """True or False from the list; None when an available group does not mention the field."""
-    items = [item for item in remote.get(group) or () if isinstance(item, dict)
-             and all(item.get(key) == value for key, value in (match or {}).items())]
-    available = [item for item in items if _level(item.get("controlCapability")) >= 1]
+    available = _available(remote, group, match)
     if not available:
         return False                      # not listed, or switched off
     if field != "controlCapability" and not any(field in item for item in available):
         return None
     return any(_level(item.get(field)) in levels for item in available)
+
+
+def _remote_groups(data: Any) -> dict | None:
+    """The first record's remote-capability groups; None for an answer too small to rely on."""
+    records = data.get("capabilities") if isinstance(data, dict) else None
+    record = records[0] if isinstance(records, list) and records else data
+    capability = record.get("capability", record) if isinstance(record, dict) else None
+    remote = capability.get("remoteCapability") if isinstance(capability, dict) else None
+    if not isinstance(remote, dict) or sum(isinstance(v, list) for v in remote.values()) < _MIN_GROUPS:
+        return None
+    return remote
 
 
 def equipment_from_capabilities(data: Any) -> dict[str, bool]:
@@ -170,11 +188,7 @@ def equipment_from_capabilities(data: Any) -> dict[str, bool]:
     group is missing or switched off is False; one the list does not mention is
     left out. Returns {} for a response too small to rely on.
     """
-    records = data.get("capabilities") if isinstance(data, dict) else None
-    record = records[0] if isinstance(records, list) and records else data
-    capability = record.get("capability", record) if isinstance(record, dict) else None
-    remote = capability.get("remoteCapability") if isinstance(capability, dict) else None
-    if not isinstance(remote, dict) or sum(isinstance(v, list) for v in remote.values()) < _MIN_GROUPS:
+    if (remote := _remote_groups(data)) is None:
         return {}
     remote = dict(remote)
     if "chargerCapabilities" in remote and "chargerCapability" not in remote:
@@ -188,6 +202,66 @@ def equipment_from_capabilities(data: Any) -> dict[str, bool]:
     if flags.get("charge_current_a") is not None and flags.get("charge_voltage_v") is not None:
         flags["charge_power_kw"] = bool(flags["charge_current_a"] and flags["charge_voltage_v"])
     return {feature: value for feature, value in flags.items() if value is not None}
+
+
+def _choices(items: list[dict], field: str, values) -> tuple[int, ...] | None:
+    """``values(item)`` for the first entry that states ``field``.
+
+    () when no entry is switched on or the field grants no control; None when the
+    switched-on entries do not mention it.
+    """
+    if not items:
+        return ()
+    item = next((item for item in items if field in item), None)
+    if item is None:
+        return None
+    if _level(item[field]) not in _CONTROL:
+        return ()
+    return values(item)
+
+
+def _between(low_field: str, high_field: str, accepted: range):
+    """The non-zero accepted values within an entry's advertised minimum and maximum."""
+    def values(item: dict) -> tuple[int, ...] | None:
+        low, high = item.get(low_field), item.get(high_field)
+        if type(low) is not int or type(high) is not int:
+            return None
+        return tuple(value for value in accepted if value and low <= value <= high)
+    return values
+
+
+def _blowing_modes(item: dict) -> tuple[int, ...] | None:
+    codes = item.get("supportBlowingModes")
+    if not isinstance(codes, list):
+        return None
+    # Code 0 is listed by an Aion UT but its meaning is unknown; commands send positive codes only.
+    return tuple(sorted({code for code in codes if type(code) is int and code > 0}))
+
+
+def ranges_from_capabilities(data: Any) -> dict[str, tuple[int, ...]]:
+    """The values the car's capability list accepts remotely, within what this library sends.
+
+    Takes the response of ``GacClient.get_control_capabilities``. Keys:
+    ``fan_speeds`` (manual blower speeds; off is its own command), ``blowing_modes``
+    (raw outlet codes) and ``seat_<n>_ventilation_levels`` (strengths; 0 is off and
+    always allowed). An empty tuple means the list offers no remote choice; a key is
+    left out when the list does not say. Returns {} for a response too small to rely on.
+    An Aion UT lists fan speeds 1–7 (its console has ten), outlets 1–4 and front-seat
+    levels 1–3, and remote trials matched each.
+    """
+    if (remote := _remote_groups(data)) is None:
+        return {}
+    air = _available(remote, "airConditionCapabilities")
+    ranges = {
+        "fan_speeds": _choices(air, "windStrengthCapability",
+                               _between("minWindStrength", "maxWindStrength", FAN_SPEEDS)),
+        "blowing_modes": _choices(air, "blowingModeCapability", _blowing_modes),
+    }
+    seat_levels = _between("minWindStrength", "maxWindStrength", SEAT_VENTILATION_LEVELS)
+    for seat in range(1, 5):
+        ranges[f"seat_{seat}_ventilation_levels"] = _choices(
+            _available(remote, "seatTemperatureCapabilities", {"seat": seat}), "windStrengthCapability", seat_levels)
+    return {key: value for key, value in ranges.items() if value is not None}
 
 
 def _known(value: Any) -> bool:

@@ -172,3 +172,55 @@ def test_an_available_group_that_omits_a_field_leaves_it_to_the_reports():
     del window["ventilateModeCapability"]
     flags = equipment_from_capabilities(data)
     assert "ventilation" not in flags and flags["windows"] is True
+
+
+def _air_and_seats(data):
+    remote = data["capabilities"][0]["capability"]["remoteCapability"]
+    return remote["airConditionCapabilities"][0], remote["seatTemperatureCapabilities"]
+
+
+def test_an_aion_ut_capability_list_gives_its_verified_remote_ranges():
+    from gac_connect import ranges_from_capabilities
+    assert ranges_from_capabilities(_ut_capabilities()) == {
+        "fan_speeds": (1, 2, 3, 4, 5, 6, 7), "blowing_modes": (1, 2, 3, 4),
+        "seat_1_ventilation_levels": (1, 2, 3), "seat_2_ventilation_levels": (1, 2, 3),
+        "seat_3_ventilation_levels": (), "seat_4_ventilation_levels": (),
+    }
+
+
+def test_ranges_stay_within_what_the_library_sends():
+    from gac_connect import ranges_from_capabilities
+    data = _ut_capabilities()
+    air, seats = _air_and_seats(data)
+    air.update(minWindStrength=2, maxWindStrength=12, supportBlowingModes=[7, 0, -1, 5, 5, True, "3", 1])
+    seats[0].update(maxWindStrength=5)
+    seats[1].update(maxWindStrength=2)
+    ranges = ranges_from_capabilities(data)
+    assert ranges["fan_speeds"] == tuple(range(2, 11))
+    assert ranges["blowing_modes"] == (1, 5, 7)
+    assert ranges["seat_1_ventilation_levels"] == (1, 2, 3)
+    assert ranges["seat_2_ventilation_levels"] == (1, 2)
+
+
+def test_a_field_without_control_offers_no_choice_and_an_unstated_one_is_left_out():
+    from gac_connect import ranges_from_capabilities
+    data = _ut_capabilities()
+    air, seats = _air_and_seats(data)
+    air["windStrengthCapability"] = 1               # readable only
+    del air["supportBlowingModes"]
+    del seats[0]["maxWindStrength"]
+    ranges = ranges_from_capabilities(data)
+    assert ranges["fan_speeds"] == ()
+    assert "blowing_modes" not in ranges and "seat_1_ventilation_levels" not in ranges
+    assert ranges["seat_2_ventilation_levels"] == (1, 2, 3)
+
+
+def test_a_switched_off_group_offers_no_ranges_and_a_partial_list_proves_nothing():
+    from gac_connect import ranges_from_capabilities
+    data = _ut_capabilities()
+    air, _ = _air_and_seats(data)
+    air["controlCapability"] = 0
+    ranges = ranges_from_capabilities(data)
+    assert ranges["fan_speeds"] == ranges["blowing_modes"] == ()
+    for data in (None, {}, {"capabilities": []}):
+        assert ranges_from_capabilities(data) == {}
