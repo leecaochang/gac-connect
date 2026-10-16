@@ -103,6 +103,7 @@ class PushResult:
     vin: str | None = None
     update_time_ms: int | None = None
     reason: str | None = None       # this library's explanation of a known refusal code
+    details: tuple[str, ...] = ()   # what the car itself names as the cause of a refusal
 
 
 def _clean(value: Any, limit: int = 120) -> str | None:
@@ -133,6 +134,47 @@ def normalize_id(value: Any, limit: int = 64) -> str | None:
         return None
     text = "".join(ch for ch in value if ch.isprintable()).strip()
     return text[:limit] or None
+
+
+def _addition_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def car_reported(data: Any, limit: int = 4) -> tuple[str, ...]:
+    """The car's own causes for a refused item: the additionInfos with a non-zero value.
+
+    A refused lock (Aion UT, door open) answers ``results[].itemInfos[{itemErrorCode
+    13005, additionInfos[{additionDes "Driver door ajar status", additionValue "1.0"},
+    {additionDes "BCM leave out remote mode reasons", additionValue "0.0"}]}]``.
+    """
+    found: list[str] = []
+    results = data.get("results") if isinstance(data, dict) else None
+    for result in results if isinstance(results, list) else ():
+        infos = result.get("itemInfos") if isinstance(result, dict) else None
+        for info in infos if isinstance(infos, list) else ():
+            if not isinstance(info, dict) or str(info.get("itemErrorCode") or "0").strip() in ("0", ""):
+                continue
+            additions = info.get("additionInfos")
+            for addition in additions if isinstance(additions, list) else ():
+                if not isinstance(addition, dict):
+                    continue
+                text = _clean(addition.get("additionDes"), 80)
+                value = _addition_value(addition.get("additionValue"))
+                if not text or not value:
+                    continue
+                if value == 1 and text.lower().endswith(" status"):
+                    text = text[:-len(" status")]
+                elif value != 1:
+                    text = f"{text}: {value:g}"
+                if text not in found:
+                    found.append(text)
+    return tuple(found[:limit])
 
 
 def interpret(payload: bytes | dict) -> PushResult:
@@ -166,6 +208,7 @@ def interpret(payload: bytes | dict) -> PushResult:
         vin=normalize_id(ident.get("vin")),
         update_time_ms=_millis(upd),
         reason=result_reason(normalize_id(code)) if ok is False else None,
+        details=car_reported(data) if ok is False else (),
     )
 
 

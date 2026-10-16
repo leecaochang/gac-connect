@@ -43,6 +43,9 @@ READINGS = frozenset({
     "charge_window_start", "charge_window_stop", "charge_weekly", "charging_mode", "updated_ms",
     "plugged_in", "charging", "locked", "door_open", "window_open", "hatch_open", "hood_open", "online",
     "brake_fluid_low", "battery_temp_c", "headlights_on", "sterilisation_on",
+    "high_beam_on", "rear_fog_on", "turn_signal_on",
+    *(f"{position}_{kind}_open" for position in ("front_left", "front_right", "rear_left", "rear_right")
+      for kind in ("door", "window")),
     "charger_locked", "sunroof_open", "steering_heat_on", "lights_on", "ac_on", "ac_target_temp_c",
     "fridge_mode", "fridge_temp_c", "fridge_keep_mode", "fridge_keep_minutes", "latitude", "longitude",
     *(f"tyre_{i}_{kind}" for i in range(1, 5) for kind in ("pressure", "temperature")),
@@ -91,7 +94,7 @@ COMMAND_FEATURES = {
 FEATURES = READINGS | EQUIPMENT_READINGS.keys()
 # An off reading proves nothing for these: an Aion UT reports a light that is off the
 # same way as one that is not fitted, so only a light seen on establishes it.
-_SEEN_WHEN_ON = frozenset({"headlights_on"})
+_SEEN_WHEN_ON = frozenset({"headlights_on", "high_beam_on", "rear_fog_on", "turn_signal_on"})
 
 # The car's capability list (GacClient.get_control_capabilities). Each group has a
 # controlCapability switch: 0 means the group is not available, and its other values

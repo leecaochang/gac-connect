@@ -89,6 +89,32 @@ def _items(res: dict, key: str) -> list:
     return items if isinstance(items, list) else []
 
 
+# Door and window numbers by position, as an Aion UT reports them; the same on a
+# right-hand-drive car (its driver's door and window are number 2).
+POSITIONS = {1: "front_left", 2: "front_right", 3: "rear_left", 4: "rear_right"}
+# lightAccessors light numbers seen on an Aion UT. Either turn indicator and the hazard lights
+# all report as light 6. Light 7 came on once with the high beams; what it is is unknown.
+LIGHTS = {2: "headlights", 3: "high_beam", 5: "rear_fog", 6: "turn_signal"}
+
+
+def _numbered(res: dict, key: str, id_key: str, number: int) -> dict | None:
+    return next((item for item in _items(res, key)
+                 if isinstance(item, dict) and _exact_int(item.get(id_key)) == number), None)
+
+
+def _opened(item: dict | None) -> bool | None:
+    """One door's or window's openMode: positive is open, 0 closed; flagged-invalid is unknown."""
+    if item is None or not _not_invalid(item, "openModeFlag"):
+        return None
+    mode = _exact_int(item.get("openMode"))
+    return None if mode is None or mode < 0 else mode > 0
+
+
+def _light_on(item: dict | None) -> bool | None:
+    # An Aion UT reports -1 rather than 0 while a light is off, so -1 reads as off.
+    return {1: True, 0: False, -1: False}.get(_exact_int(item.get("open"))) if item else None
+
+
 def _decode_door_locks(doors: Any, model: str | None = None) -> bool | None:
     if not isinstance(doors, list) or not doors:
         return None
@@ -243,12 +269,25 @@ class VehicleStatus:
     window_open: bool | None = None
     hatch_open: bool | None = None           # the boot: every hatch except 1
     hood_open: bool | None = None            # hatch 1, the bonnet
+    # each door and window by position (see POSITIONS)
+    front_left_door_open: bool | None = None
+    front_right_door_open: bool | None = None
+    rear_left_door_open: bool | None = None
+    rear_right_door_open: bool | None = None
+    front_left_window_open: bool | None = None
+    front_right_window_open: bool | None = None
+    rear_left_window_open: bool | None = None
+    rear_right_window_open: bool | None = None
     # airConditionAccessors airConditionAntivirusMode: 1 while sterilisation runs (the car
     # also runs the A/C hot), 0 otherwise (Aion UT)
     sterilisation_on: bool | None = None
-    # lightAccessors light 2: on at night and with the headlights left on (Aion UT). The car
-    # reports -1 rather than 0 while it is off, so -1 reads as off for this light.
+    # lightAccessors (see LIGHTS): light 2 is on with the dipped headlights, 3 with the high
+    # beams, 5 with the rear fog light, 6 with either turn indicator or the hazard lights
+    # (Aion UT). Daytime running lights, side lights and reading lamps are not reported.
     headlights_on: bool | None = None
+    high_beam_on: bool | None = None
+    rear_fog_on: bool | None = None
+    turn_signal_on: bool | None = None
     sunroof_open: bool | None = None
     brake_fluid_low: bool | None = None
     tyres: list[Tyre] = field(default_factory=list)
@@ -330,6 +369,10 @@ class VehicleStatus:
         if cur is not None and cur >= cls._CURRENT_UNKNOWN:
             cur = None
         est = _num(chg.get("estimatedChargedDuration")) if _not_invalid(chg, "estimatedChargedDurationFlag") else None
+        # An Aion UT sends milliseconds in whole minutes (24240000 while its screen showed
+        # 6 h 42 min, 2026-10-16), and 0 when not charging; a small value is taken as minutes.
+        if est is not None and (est >= _MAX_CHARGE_MINUTES or (est > 0 and est % 60000 == 0)):
+            est = round(est / 60000)
         if est is not None and not 0 <= est < _MAX_CHARGE_MINUTES:
             est = None   # discard an out-of-range duration
         volt = _num(chg.get("chargingVoltage")) if _enabled(chg, "chargingVoltageFlag") else None
@@ -412,9 +455,12 @@ class VehicleStatus:
         lights = _num(light.get("open"))
         if lights is not None and lights < 0:
             lights = None
-        headlight = next((item for item in _items(results, "lightAccessors")
-                          if isinstance(item, dict) and _exact_int(item.get("light")) == 2), None)
-        headlights_on = {1: True, 0: False, -1: False}.get(_exact_int(headlight.get("open"))) if headlight else None
+        lights_by_name = {name: _light_on(_numbered(results, "lightAccessors", "light", number))
+                          for number, name in LIGHTS.items()}
+        by_position = {
+            f"{position}_{kind}_open": _opened(_numbered(results, f"{kind}Accessors", kind, number))
+            for number, position in POSITIONS.items() for kind in ("door", "window")
+        }
         weekly = _exact_int(chg.get("weeklyReservation"))
         if weekly is not None and not 0 <= weekly <= 127:
             weekly = None
@@ -467,7 +513,11 @@ class VehicleStatus:
             power_mode=vehicle_power,
             soc=round(soc * 100, 1) if soc is not None else None,
             range_km=range_km,
-            charging={0: False, 2: True}.get(_exact_int(chg.get("chargingStatus"))),
+            # chargingStatus (Aion UT, 2026-10-16): 1 plugged in with the charger off, 2 charging,
+            # 4 plugged in once a one-time window had ended, 23 briefly after the connector was
+            # unlocked, 27 waiting for a scheduled start (the screen's "Scheduled charge waiting").
+            charging={0: False, 1: False, 2: True, 4: False, 23: False, 27: False}.get(
+                _exact_int(chg.get("chargingStatus"))),
             charging_mode=ChargingMode(mode) if mode in (0, 1, 2) else None,
             charge_current_a=cur,
             charge_voltage_v=volt,
@@ -489,7 +539,11 @@ class VehicleStatus:
             window_open=any_open("windowAccessors", "openMode"),
             hatch_open=hatch_open(hood=False),
             hood_open=hatch_open(hood=True),
-            headlights_on=headlights_on,
+            **by_position,
+            headlights_on=lights_by_name["headlights"],
+            high_beam_on=lights_by_name["high_beam"],
+            rear_fog_on=lights_by_name["rear_fog"],
+            turn_signal_on=lights_by_name["turn_signal"],
             sterilisation_on={0: False, 1: True}.get(_exact_int(air.get("airConditionAntivirusMode"))),
             brake_fluid_low=brake_fluid_low(),
             sunroof_open=any_open("sunroofAccessors", "openMode"),

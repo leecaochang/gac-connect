@@ -206,3 +206,26 @@ def test_the_older_standby_setting_is_read_like_the_app(default, path):
 
     assert asyncio.run(run()) == {"active": 1}
     client._iov_call.assert_awaited_once_with(path, {"vin": "VIN", "type": "oks"}, sensitive={"vin": "VIN"})
+
+
+def test_a_refusal_names_what_the_car_reported():
+    from gac_connect.push import interpret
+
+    # Lock with the driver's door open, polled (Aion UT, 2026-10-16; VIN removed).
+    reply = {"msg": "任务执行条件不满足", "code": 13005, "data": {
+        "identifier": {"sessionId": "2_s", "vin": "VIN", "event": "control_door"},
+        "results": [
+            {"door": 1, "lock": 1, "openMode": 0, "itemInfos": [{"operateName": "lock", "itemErrorCode": 13005,
+             "additionInfos": [{"additionValue": "1.0", "additionDes": "Driver door ajar status", "additionNo": 12},
+                               {"additionValue": "0.0", "additionDes": "BCM leave out remote mode reasons",
+                                "additionNo": 43}]}]},
+            {"door": 2, "lock": 1, "openMode": 1}]}}
+    result = interpret(reply)
+    assert result.ok is False and result.code == "13005"
+    assert result.details == ("Driver door ajar",)
+    reply["data"]["results"][0]["itemInfos"][0]["additionInfos"][1]["additionValue"] = "3.0"
+    assert interpret(reply).details == ("Driver door ajar", "BCM leave out remote mode reasons: 3")
+    # An accepted command's additionInfos (vehicle speed and the like) are not causes.
+    reply.update(code=0, msg="success")
+    reply["data"]["results"][0]["itemInfos"][0]["itemErrorCode"] = 0
+    assert interpret(reply).details == ()

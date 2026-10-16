@@ -21,12 +21,13 @@ Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64).
 Gateway behaviour verified on an Aion UT (2026-10-13): ``{"chargingMode": 0}``
 alone switches the schedule off and the car keeps its window; mode 0 with any
 schedule field is refused with HTTP 400. Loop mode with times of day and dated
-calendar fields is accepted with or without days. Mode 1 is refused with 13101,
-whether its times are of day or Unix ms, so a reported once window (mode 1,
-Unix-ms times encoding the calendar clock in UTC+8) is resent as loop without
-days. Stopping at the car's charge limit (``chargingEndType`` 1) sends no stop
-time, as the app does; with one the request is refused with 13101. The car keeps
-its saved stop time. A window that crosses midnight sends its stop as the time of
+calendar fields is accepted with or without days. Mode 1 with times (of day or
+Unix ms) is refused with 13101, so a reported once window (mode 1, Unix-ms times
+encoding the calendar clock in UTC+8) is resent as loop without days. Stopping at
+the car's charge limit (``chargingEndType`` 1) sends no stop time, as the app does;
+with one the request is refused with 13101. The car keeps its saved stop time. One
+time to the charge limit is sent as the app's once: mode 1 with a dated start alone
+(verified 2026-10-16: the car waited and started on time). A window that crosses midnight sends its stop as the time of
 day plus 24 hours (00:10 as 24:10), as the app does and as the car reports it; a stop
 earlier than the start is refused with 13002.
 """
@@ -164,6 +165,12 @@ def _build(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int, end_ty
     A stop at or before the start is the next day's, sent as its time of day plus 24 h
     (00:10 as 24:10), as the app does.
     """
+    if end_type == END_AT_SOC and not weekly:
+        # One time to the charge limit is the app's once: mode 1 with a dated start alone.
+        # An Aion UT (2026-10-16) stopped charging at once, waited (chargingStatus 27) and
+        # started on time; with a stop it refuses 13101.
+        start, _ = _next_window(sh, sm, eh, em, tz, 0, now, open_now=False)
+        return {"chargingMode": MODE_SCHEDULED, "chargingEndType": END_AT_SOC, "startTime": _struct(start)}
     start, stop = _next_window(sh, sm, eh, em, tz, weekly, now, open_now=open_now)
     stop_ms = _ms_of_day(eh, em) + (_DAY_MS if (eh, em) <= (sh, sm) else 0)
     return _operation(_ms_of_day(sh, sm), stop_ms, weekly, MODE_LOOP, end_type,

@@ -93,6 +93,14 @@ def test_a_target_level_window_needs_a_start_still_ahead():
     assert stamp(op["startTime"]).isoformat() == "2026-10-15T15:00:00+07:00"
 
 
+@pytest.mark.parametrize("stop", [None, "05:00"])
+def test_one_time_to_the_charge_limit_is_the_apps_once(stop):
+    # Aion UT 2026-10-16: this body stopped charging, waited and started at 17:24.
+    op = window_operation("17:24", stop, ZONE, until_soc=True, now=datetime(2026, 10, 16, 17, 23, tzinfo=ZONE))
+    assert op == {"chargingMode": 1, "chargingEndType": 1, "startTime": {
+        "year": 2026, "month": 10, "day": 16, "hour": 17, "minute": 24, "second": 0, "millisecond": 0}}
+
+
 @pytest.mark.parametrize("stop", ["05:00", "23:00", None])
 def test_stopping_at_the_charge_limit_sends_no_stop_time(stop):
     # Verified on an Aion UT: with a stop time the gateway refuses this with 13101.

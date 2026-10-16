@@ -324,12 +324,19 @@ def test_charge_power_and_time():
     from gac_connect.models import VehicleStatus
     s = VehicleStatus.from_results({"chargingAccessors": [{"chargingCurrent": 8.8, "chargingVoltage": 240.0,
                                                            "estimatedChargedDuration": 44460000}]})
-    assert s.charge_voltage_v == 240.0 and s.charge_power_kw == 2.11 and s.estimated_charge_minutes is None
+    # Milliseconds in whole minutes: 44460000 is 12 h 21 min at 2.1 kW.
+    assert s.charge_voltage_v == 240.0 and s.charge_power_kw == 2.11 and s.estimated_charge_minutes == 741
     s = VehicleStatus.from_results({"chargingAccessors": [{"chargingCurrent": 0.0, "chargingVoltage": 0.0,
                                                            "estimatedChargedDuration": 95}]})
     assert s.charge_power_kw is None and s.charge_voltage_v is None and s.estimated_charge_minutes == 95
     s = VehicleStatus.from_results({"chargingAccessors": [{"chargingCurrent": 0.0, "chargingVoltage": 240.0}]})
     assert s.charge_power_kw == 0.0 and s.charge_voltage_v == 240.0
+    # Aion UT 2026-10-16: 24240000 while the car's screen showed 6 h 42 min.
+    s = VehicleStatus.from_results({"chargingAccessors": [{"estimatedChargedDuration": 24240000,
+                                                           "estimatedChargedDurationFlag": 1}]})
+    assert s.estimated_charge_minutes == 404
+    s = VehicleStatus.from_results({"chargingAccessors": [{"estimatedChargedDuration": 8 * 86_400_000}]})
+    assert s.estimated_charge_minutes is None                       # over a week: discarded
 
 
 # ---- fridge -----------------------------------------------------------------

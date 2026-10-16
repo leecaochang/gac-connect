@@ -271,6 +271,52 @@ def test_headlights_are_established_only_once_seen_on():
     assert caps.feature("headlights_on").state is Support.SUPPORTED
 
 
+def _lamps(*on):
+    # Aion UT 2026-10-16: lights 1-8 and 10 are reported; off ones as -1.
+    return {"lightAccessors": [{"light": n, "open": 1 if n in on else -1} for n in (1, 2, 3, 4, 5, 6, 7, 8, 10)]}
+
+
+@pytest.mark.parametrize("on,expected", [
+    ((2, 3), {"headlights_on": True, "high_beam_on": True}),     # high beams (with the dipped beams)
+    ((2, 5), {"headlights_on": True, "rear_fog_on": True}),       # rear fog light
+    ((6,), {"turn_signal_on": True}),                             # either indicator, or the hazard lights
+    ((2, 3, 7), {"headlights_on": True, "high_beam_on": True}),   # light 7: unknown
+    ((), {}),
+])
+def test_each_reported_light_reads_on_by_its_number(on, expected):
+    status = VehicleStatus.from_results(_lamps(*on))
+    for name in ("headlights_on", "high_beam_on", "rear_fog_on", "turn_signal_on"):
+        assert getattr(status, name) is expected.get(name, False)
+    assert VehicleStatus.from_results({}).high_beam_on is None
+
+
+def test_lights_are_established_only_once_seen_on():
+    from gac_connect.capabilities import Capabilities, Support
+    caps = Capabilities("Aion UT")
+    caps.observe(VehicleStatus.from_results(_lamps()))
+    assert caps.feature("rear_fog_on").state is not Support.SUPPORTED
+    caps.observe(VehicleStatus.from_results(_lamps(2, 5)))
+    assert caps.feature("rear_fog_on").state is Support.SUPPORTED
+    assert caps.feature("turn_signal_on").state is not Support.SUPPORTED
+
+
+@pytest.mark.parametrize("number,position", [(1, "front_left"), (2, "front_right"), (3, "rear_left"),
+                                             (4, "rear_right")])
+def test_each_door_and_window_reads_by_its_number(number, position):
+    # Aion UT (right-hand drive) 2026-10-16: the front left window is 1, the driver's
+    # (front right) door and window are 2, rear left 3, rear right 4.
+    report = {kind: [{kind[:-9]: n, "openMode": int(n == number)} for n in (1, 2, 3, 4)]
+              for kind in ("doorAccessors", "windowAccessors")}
+    status = VehicleStatus.from_results(report)
+    for other in ("front_left", "front_right", "rear_left", "rear_right"):
+        assert getattr(status, f"{other}_door_open") is (other == position)
+        assert getattr(status, f"{other}_window_open") is (other == position)
+    assert status.door_open is True and status.window_open is True
+    missing = VehicleStatus.from_results({"windowAccessors": [{"window": 1, "openMode": 0}]})
+    assert missing.front_left_window_open is False and missing.rear_right_window_open is None
+    assert VehicleStatus.from_results({"windowAccessors": [{"window": 1, "openMode": -1}]}).front_left_window_open is None
+
+
 def test_battery_temperature_follows_the_battery_report():
     status = VehicleStatus.from_results({"batteryAccessors": [{"battery": 1, "temperature": 30.5, "voltage": 12.8}]})
     assert (status.battery_temp_c, status.aux_voltage) == (30.5, 12.8)
@@ -282,3 +328,13 @@ def test_sterilisation_follows_the_antivirus_mode(mode, on):
     air = {"airConditionAntivirusMode": mode} if mode is not None else {}
     assert VehicleStatus.from_results({"airConditionAccessors": [air]}).sterilisation_on is on
 
+
+
+@pytest.mark.parametrize("code,charging", [(0, False), (1, False), (2, True), (4, False), (23, False), (27, False),
+                                           (5, None)])
+def test_charging_status_codes(code, charging):
+    # Aion UT 2026-10-16: 1 plugged in with the charger switched off, 2 charging at 31 A / 225 V,
+    # 27 waiting for a scheduled start.
+    status = VehicleStatus.from_results({"chargingAccessors": [{"chargingStatus": code}],
+                                         "chargerAccessors": [{"plug": 1, "lock": 0}]})
+    assert status.charging is charging
