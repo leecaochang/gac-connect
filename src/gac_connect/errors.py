@@ -12,6 +12,13 @@ class ResponseError(GacError):
     """An HTTP or response-shape failure, not evidence of expired credentials."""
 
 
+class AccountSessionEnded(ResponseError):
+    """GAC's account session has ended (the app signs in elsewhere and GAC allows one).
+
+    Only account-API features, such as the alert list, need it; the vehicle session it
+    minted keeps working, so this is not a reason to sign everything in again."""
+
+
 class AuthError(GacError):
     """Sign-in could not be completed."""
 

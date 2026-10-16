@@ -10,9 +10,11 @@ The gateway has no plain "start" / "stop"; charging is gated through the schedul
   charging outside the window (DC fast charging starts regardless). A one-time
   window far ahead is acknowledged but not kept, so there is no open-ended pause.
 * **set window** — loop mode (2) with times of day and calendar fields dated for
-  the next (selected) occurrence. Selected days repeat; no days (``weekly`` 0) is
-  a one-time window, which the car records as the app's "once" (mode 1). 127 is
-  every day.
+  the (selected) occurrence open now, else the next one, so a one-time window already
+  open starts at once. Selected days repeat; no days (``weekly`` 0) is a one-time
+  window, which the car records as the app's "once" (mode 1). 127 is every day.
+  With no window, the car reports once mode with both times 0 (the app's "Charging
+  time is not set").
 
 Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64).
 
@@ -98,18 +100,21 @@ def _exact(value: object) -> int | None:
 
 
 def _next_window(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int,
-                 now: datetime | None) -> tuple[datetime, datetime]:
-    """The next start on a selected day (any day for 0) and its stop strictly afterwards."""
+                 now: datetime | None, *, open_now: bool = True) -> tuple[datetime, datetime]:
+    """The window on a selected day (any day for 0) that is open now, else the next one to start.
+
+    Its stop is strictly after its start. Without ``open_now`` (no stop time is sent,
+    so the car cannot tell whether a window is still open) only a start still ahead counts.
+    """
     now = datetime.now(tz) if now is None else now.astimezone(tz)
-    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-    if start <= now:
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0) - timedelta(days=1)
+    while True:
+        stop = start.replace(hour=eh, minute=em)
+        if stop <= start:
+            stop += timedelta(days=1)
+        if (not weekly or weekly & (1 << start.weekday())) and (stop > now if open_now else start > now):
+            return start, stop
         start += timedelta(days=1)
-    while weekly and not weekly & (1 << start.weekday()):
-        start += timedelta(days=1)
-    stop = start.replace(hour=eh, minute=em)
-    if stop <= start:
-        stop += timedelta(days=1)
-    return start, stop
 
 
 def _dated(parts: dict) -> bool:
@@ -144,19 +149,22 @@ def reported_window(charging: object) -> dict | None:
         parts = {name: _exact(struct.get(name)) for name in _STRUCT_KEYS} if isinstance(struct, dict) else None
         if parts and _dated(parts):
             window[key] = {name: part if part is not None else 0 for name, part in parts.items()}
+    if start == stop == 0 and "startTime" not in window and "stopTime" not in window:
+        return None     # the car's "Charging time is not set": no window to resume
     if mode in (MODE_SCHEDULED, MODE_LOOP):
         window["chargingMode"] = mode      # the scheduled mode to resume later
     return window
 
 
 def _build(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int, end_type: int,
-           now: datetime | None) -> dict:
-    """Loop mode with times of day, dated for the next occurrence (on a selected day, if any).
+           now: datetime | None, *, open_now: bool = True) -> dict:
+    """Loop mode with times of day, dated for the occurrence open now or else the next one
+    (on a selected day, if any), so a one-time window already open starts at once.
 
     A stop at or before the start is the next day's, sent as its time of day plus 24 h
     (00:10 as 24:10), as the app does.
     """
-    start, stop = _next_window(sh, sm, eh, em, tz, weekly, now)
+    start, stop = _next_window(sh, sm, eh, em, tz, weekly, now, open_now=open_now)
     stop_ms = _ms_of_day(eh, em) + (_DAY_MS if (eh, em) <= (sh, sm) else 0)
     return _operation(_ms_of_day(sh, sm), stop_ms, weekly, MODE_LOOP, end_type,
                       start_struct=_struct(start), stop_struct=_struct(stop))
@@ -213,9 +221,10 @@ def window_operation(start_hhmm: str, stop_hhmm: str | None, tz: ZoneInfo, *,
                      weekly: int = 0, until_soc: bool = False, now: datetime | None = None) -> dict:
     """Build a charge window: selected days repeat, 127 is every day, and 0 is one time (the app's Once).
 
-    The calendar fields are dated for the next (selected) occurrence, with the
-    stop strictly after the start. With ``until_soc`` the car stops at its charge
-    limit and no stop time is sent, so ``stop_hhmm`` may be None.
+    The calendar fields are dated for the (selected) occurrence open now, else the
+    next one, with the stop strictly after the start. With ``until_soc`` the car stops
+    at its charge limit and no stop time is sent, so ``stop_hhmm`` may be None and only
+    a start still ahead counts.
     """
     if not isinstance(until_soc, bool):
         raise ValueError("until_soc must be a boolean")
@@ -228,4 +237,5 @@ def window_operation(start_hhmm: str, stop_hhmm: str | None, tz: ZoneInfo, *,
         raise ValueError("start and stop must differ; use Charge now to charge whenever plugged in")
     sh, sm = map(int, start_hhmm.split(":"))
     eh, em = map(int, stop_hhmm.split(":"))
-    return _build(sh, sm, eh, em, tz, weekly, END_AT_SOC if until_soc else END_AT_TIME, now)
+    return _build(sh, sm, eh, em, tz, weekly, END_AT_SOC if until_soc else END_AT_TIME, now,
+                  open_now=not until_soc)

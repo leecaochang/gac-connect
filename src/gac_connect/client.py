@@ -51,6 +51,7 @@ from .const import (
     ERR_TOKEN_INVALID,
     HTTP_TIMEOUT,
     IOV_APP_ID,
+    IOV_POLL_RESULT,
     IOV_VERSION,
     MAIN_APP_ID,
     PROFILE_IOV_APP_ID,
@@ -62,6 +63,7 @@ from .const import (
 )
 from .crypto import decrypt_envelope, encrypt_envelope, encrypt_sensitive
 from .errors import (
+    AccountSessionEnded,
     AuthExpiredError,
     CaptchaError,
     CommandError,
@@ -85,6 +87,13 @@ from .signing import IOV_FIELDS, MAIN_FIELDS, sign
 # store) never spend the same single-use refresh token twice.
 _REFRESH_GATE = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
+# Account-API codes on which GAC 2.0.32 (response interceptor 0xdbe2c0) leaves the account:
+# 4402 and 4421 sign out (an expired token, which a refresh may still mend); 4423 opens the
+# sign-in page with GAC's "kickMessage" (the account signed in on another phone). A refresh
+# after 4423 could take the session back from the app, so it is not tried.
+ACCOUNT_TOKEN_EXPIRED = frozenset({"4402", "4421"})
+ACCOUNT_SIGNED_IN_ELSEWHERE = "4423"
+ACCOUNT_SESSION_ENDED = ACCOUNT_TOKEN_EXPIRED | {ACCOUNT_SIGNED_IN_ELSEWHERE}
 
 
 def _request_id() -> str:
@@ -141,6 +150,8 @@ class GacClient:
         # The IoV subsystem runs under a per-profile app id (My AION UK uses "3").
         self._iov_app_id = PROFILE_IOV_APP_ID.get(profile, IOV_APP_ID)
         self._session = Session(region=region)
+        # (time.time(), accepted) of the last account-token refresh, for diagnostics.
+        self.last_account_refresh: tuple[float, bool] | None = None
         self._captcha: Captcha | None = None
         self._verify_ticket: str | None = None
         # Every request passes the process-wide limiter; a caller's own limiter (for
@@ -374,12 +385,31 @@ class GacClient:
             authorization=self._session.main_token,
         )
         d = self._data(resp)
-        if not (self._ok(resp) and isinstance(d, dict) and d.get("token")):
+        accepted = bool(self._ok(resp) and isinstance(d, dict) and d.get("token"))
+        self.last_account_refresh = (time.time(), accepted)
+        if not accepted:
+            _LOGGER.info("GAC refused to refresh the account token (result code %s)",
+                         _safe_result_code(resp.get("code") if isinstance(resp, dict) else None))
             return False
+        _LOGGER.info("Refreshed GAC's account token")
         self._session.main_token = d["token"]
         self._session.main_refresh_token = d.get("refreshToken") or self._session.main_refresh_token
         await self._persist()
         return True
+
+    async def _account_call(self, path: str, body: Any) -> Any:
+        """An account-API call; an expired account token is refreshed once and the call repeated.
+
+        GAC 2.0.32 signs out on 4402 and 4421 from these calls. Only the account session
+        has run out then; the vehicle session it minted keeps working. 4423 (signed in on
+        another phone) is returned as it is, never refreshed.
+        """
+        resp = await self._main_call(path, body, authorization=self._session.main_token)
+        code = resp.get("code") if isinstance(resp, dict) else None
+        if (type(code) in (int, str) and str(code) in ACCOUNT_TOKEN_EXPIRED and self._session.main_refresh_token
+                and await self._refresh_account_token()):
+            resp = await self._main_call(path, body, authorization=self._session.main_token)
+        return resp
 
     async def _renew_from_account(self) -> bool:
         """Mint a new vehicle session from the saved account session, without signing in again.
@@ -495,6 +525,60 @@ class GacClient:
         vehicles = [Vehicle.from_record(r) for r in records if isinstance(r, dict)]
         return [v for v in vehicles if isinstance(v.vin, str) and v.vin.strip()]
 
+    async def get_alarms(self, vin: str, *, page: int = 1, page_size: int = 20) -> dict:
+        """One page of the car's alert history (GAC 2.0.32 ``alarm/page``, account API).
+
+        The page has ``list`` items with ``alarmId``, ``vin``, ``createTime``, ``alarmType`` and
+        ``alarmContent``: a JSON string holding ``alarmStatus[{alarmSource, alarms[{alarmObject,
+        alarmReason}]}]``, which the app turns into a title (charging finished, a living being
+        left in the car, 12 V battery low and so on).
+        """
+        body = {"pageNo": page, "pageSize": page_size, "order": "", "sort": "", "vin": vin}
+        resp = await self._account_call("/icv/api/alarm/page/sec", body)
+        data = self._data(resp)
+        if not self._ok(resp) or not isinstance(data, dict):
+            safe_code = _safe_result_code(resp.get("code") if isinstance(resp, dict) else None)
+            if safe_code == ACCOUNT_SIGNED_IN_ELSEWHERE:
+                raise AccountSessionEnded(f"alert list was not accepted: the GAC account signed in on another phone "
+                                          f"(result code {safe_code}); a new sign-in is needed for it")
+            if safe_code in ACCOUNT_SESSION_ENDED:
+                raise AccountSessionEnded(f"alert list was not accepted: GAC's account session has ended and could "
+                                          f"not be refreshed (result code {safe_code}); a new sign-in is needed for it")
+            detail = f"result code {safe_code}" if safe_code is not None else "no recognized result code"
+            raise ResponseError(f"alert list was not accepted ({detail})")
+        return data
+
+    async def get_departure_plans(self, vin: str, *, version: str | None = None) -> Any:
+        """The car's saved departure plans (GAC 2.0.32 one-click setout, new generation).
+
+        Each plan has ``customFeatureId``, ``configName``, ``leaveTime`` (seconds of the day),
+        ``weeklyReservation``, ``active`` and ``content`` (climate, seats, steering wheel,
+        battery temperature).
+        """
+        body = {"vin": vin, "tinyId": "", "type": "oks", **({"version": version} if version else {})}
+        resp = await self._iov_read("/iov-custom-config/new/v1/user/oks/configs/list", body, sensitive={"vin": vin})
+        data = self._data(resp)
+        if not isinstance(resp, dict) or resp.get("success") is False or not isinstance(data, (dict, list)):
+            safe_code = _safe_result_code(resp.get("code") if isinstance(resp, dict) else None)
+            detail = f"result code {safe_code}" if safe_code is not None else "no valid data"
+            raise ResponseError(f"departure plan list was not accepted ({detail})")
+        return data
+
+    async def get_standby_config(self, vin: str, *, default: bool = False) -> Any:
+        """The older single "One-click standby" setting (GAC 2.0.32 ``user/oks/config/query``),
+        or with ``default`` the default plan (``default/config/query``).
+
+        Its reply has ``customFeatureId``, ``active``, ``type``, ``version`` and ``content``
+        (cabin temperature control and seats).
+        """
+        path = f"/iov-custom-config/v1/{'default' if default else 'user/oks'}/config/query"
+        resp = await self._iov_read(path, {"vin": vin, "type": "oks"}, sensitive={"vin": vin})
+        if not isinstance(resp, dict) or resp.get("success") is False:
+            safe_code = _safe_result_code(resp.get("code") if isinstance(resp, dict) else None)
+            detail = f"result code {safe_code}" if safe_code is not None else "no valid data"
+            raise ResponseError(f"standby setting was not accepted ({detail})")
+        return self._data(resp)
+
     async def get_status(self, vin: str) -> VehicleStatus:
         resp = await self._iov_read(commands.CATALOG["status"].path, {"vin": vin}, sensitive={"vin": vin})
         data = self._data(resp)
@@ -555,6 +639,26 @@ class GacClient:
             await self._refresh(stale_token=used)
             resp = await self._iov_call(path, body, sensitive=sensitive)
         return resp
+
+    async def poll_command_result(self, vin: str, session_id: str) -> Any:
+        """The car's answer to an accepted command, read from the gateway instead of the push feed.
+
+        Returns None while the command is still executing (13001), else the answer as a
+        ``PushResult``: the reply carries a push message's fields (identifier, updateTime,
+        results), as the GAC 2.0.32 app reads it when push is unavailable.
+        """
+        # Push results and polled ones read alike.
+        from .push import interpret, normalize_id
+
+        resp = await self._iov_read(IOV_POLL_RESULT, {"identifier": {"sessionId": session_id, "vin": vin}},
+                                    sensitive={"vin": vin})
+        _LOGGER.debug("command result poll: %s", _excerpt(resp, 4000).replace(vin, "<VIN>"))
+        code = resp.get("code") if isinstance(resp, dict) else None
+        if type(code) in (int, str) and str(code) == str(CODE_COMMAND_ACCEPTED):
+            return None
+        result = interpret(resp if isinstance(resp, dict) else {})
+        return dataclasses.replace(result, session_id=result.session_id or normalize_id(session_id),
+                                   vin=result.vin or vin)
 
     # ---- push channel ----------------------------------------------------
     async def mqtt_info(self) -> dict:

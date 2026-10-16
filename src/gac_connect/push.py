@@ -135,9 +135,10 @@ def normalize_id(value: Any, limit: int = 64) -> str | None:
     return text[:limit] or None
 
 
-def interpret(payload: bytes) -> PushResult:
+def interpret(payload: bytes | dict) -> PushResult:
+    """Read a result message, as received (bytes) or already decoded (a polled reply)."""
     try:
-        obj = json.loads(payload)
+        obj = payload if isinstance(payload, dict) else json.loads(payload)
     except (ValueError, UnicodeDecodeError):
         return PushResult(None, None, None, None)
     if not isinstance(obj, dict):

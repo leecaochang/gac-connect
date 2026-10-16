@@ -10,7 +10,8 @@ from gac_connect.models import VehicleStatus
 from test_failures import Response, make_client
 
 
-@pytest.mark.parametrize("mode,expected", [(2, True), (0, False), ("2", True), ("0", False)])
+# 1 is the car switched on while stationary (Aion UT, sitting in the parked car).
+@pytest.mark.parametrize("mode,expected", [(2, True), (1, True), (0, False), ("2", True), ("1", True), ("0", False)])
 @pytest.mark.parametrize("ac_on", [False, True])
 def test_power_modes_from_ut_reports_are_independent_of_connectivity_engine_and_ac(mode, expected, ac_on):
     # The supplied on/off reports share online=True, engine.enable=1 and start=-1.
@@ -25,7 +26,7 @@ def test_power_modes_from_ut_reports_are_independent_of_connectivity_engine_and_
 
 
 @pytest.mark.parametrize("mode,raw_code", [
-    (1, 1), (3, 3), (4, 4), (-1, -1), (None, None), (True, None), (False, None),
+    (3, 3), (4, 4), (-1, -1), (None, None), (True, None), (False, None),
     (1.5, None), (float("inf"), None), (float("nan"), None), (10**400, None), ("bad", None),
 ])
 def test_unsupported_and_invalid_modes_stay_unknown(mode, raw_code):

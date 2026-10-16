@@ -296,10 +296,11 @@ def test_raw_overrides_cannot_replace_the_vehicle_identity(name):
     assert body["vin"] == "VIN" and body["extra"] == 1
 
 
-def test_anti_bodies_keep_their_identifier():
-    from gac_connect.commands import Command, build_body
-    body = build_body(Command("x", "/x", "anti"), "VIN", {"identifier": {"vin": "OTHER"}, "currentDuration": 10})
-    assert body == {"identifier": {"vin": "VIN"}, "currentDuration": 10}
+def test_sterilisation_sends_the_app_flat_body_and_keeps_its_vin():
+    from gac_connect.commands import CATALOG, build_body
+    assert build_body(CATALOG["antivirus-on"], "VIN") == {"grade": 2, "duration": 30, "vin": "VIN"}
+    body = build_body(CATALOG["antivirus-on"], "VIN", {"vin": "OTHER", "duration": 10})
+    assert body == {"grade": 2, "duration": 10, "vin": "VIN"}
 
 
 @pytest.mark.parametrize("body", [{"success": False, "code": "0000"}, {"success": False, "code": 0}, {"code": True},
@@ -374,7 +375,7 @@ def test_missing_push_details_are_a_response_error():
 
 
 @pytest.mark.parametrize("name,path,body", [
-    ("antivirus-on", "control_air_condition_antivirus/on", {"identifier": {"vin": "VIN"}, "currentDuration": 30}),
+    ("antivirus-on", "control_air_condition_antivirus/on", {"grade": 2, "duration": 30, "vin": "VIN"}),
     ("antivirus-off", "control_air_condition_antivirus/off", {"vin": "VIN"}),
     ("battery-precondition-off", "battery/pretreatment",
      {"identifier": {"vin": "VIN"}, "operations": [{"batteryPretreatmentMode": 0}]}),

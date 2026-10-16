@@ -57,3 +57,152 @@ def test_transport_requires_tls_or_explicit_consent(host, allow, connect):
         assert client.connected is False
         assert (client.broker.topics if client.broker else None) == (("result",) if connect else None)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("reply,expected", [
+    ({"code": 13001, "msg": "executing"}, None),
+    ({"code": "13001"}, None),
+    ({"code": 13005, "data": {"identifier": {"sessionId": "S1", "vin": "VIN", "event": "control_power"}}},
+     (False, "13005", "S1", "VIN", "control_power")),
+    ({"code": 0, "success": True, "data": {"updateTime": 1792031935000}}, (True, "0", "S1", "VIN", None)),
+])
+def test_a_polled_command_result_reads_like_a_push_result(reply, expected):
+    from gac_connect.const import IOV_POLL_RESULT
+    from test_failures import Response, make_client
+
+    client, _, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value=reply)
+
+    async def run():
+        await client.load()
+        return await client.poll_command_result("VIN", "S1")
+
+    result = asyncio.run(run())
+    client._iov_call.assert_awaited_once_with(IOV_POLL_RESULT, {"identifier": {"sessionId": "S1", "vin": "VIN"}},
+                                              sensitive={"vin": "VIN"})
+    if expected is None:
+        assert result is None
+    else:
+        assert (result.ok, result.code, result.session_id, result.vin, result.event) == expected
+        assert (result.reason is not None) is (result.ok is False)
+
+
+
+def test_the_alert_list_is_one_page_from_the_account_api():
+    from gac_connect.errors import ResponseError
+    from test_failures import Response, make_client
+
+    client, _, _ = make_client(Response(), valid=True)
+    page = {"pageNo": 1, "list": [{"alarmId": "1", "alarmContent": "{}"}]}
+    client._main_call = AsyncMock(side_effect=[{"code": "0000", "success": True, "data": page},
+                                               {"code": "9999", "success": False}])
+
+    async def run():
+        await client.load()
+        assert await client.get_alarms("VIN") == page
+        with pytest.raises(ResponseError, match="alert list"):
+            await client.get_alarms("VIN", page=2)
+
+    asyncio.run(run())
+    path, body = client._main_call.await_args_list[0].args
+    assert path == "/icv/api/alarm/page/sec"
+    assert body == {"pageNo": 1, "pageSize": 20, "order": "", "sort": "", "vin": "VIN"}
+    assert client._main_call.await_args_list[1].args[1]["pageNo"] == 2
+
+
+@pytest.mark.parametrize("version,body", [
+    (None, {"vin": "VIN", "tinyId": "", "type": "oks"}),
+    ("2", {"vin": "VIN", "tinyId": "", "type": "oks", "version": "2"}),
+])
+def test_the_departure_plan_list_matches_the_app_request(version, body):
+    from test_failures import Response, make_client
+
+    client, _, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value={"code": 0, "success": True, "data": [{"customFeatureId": "7"}]})
+
+    async def run():
+        await client.load()
+        return await client.get_departure_plans("VIN", version=version)
+
+    assert asyncio.run(run()) == [{"customFeatureId": "7"}]
+    client._iov_call.assert_awaited_once_with("/iov-custom-config/new/v1/user/oks/configs/list", body,
+                                              sensitive={"vin": "VIN"})
+
+
+
+def test_an_expired_account_token_is_refreshed_once_for_the_alert_list():
+    from test_failures import Response, make_client
+
+    client, _, _ = make_client(Response(), valid=True)
+    page = {"pageNo": 1, "list": []}
+    client._main_call = AsyncMock(side_effect=[
+        {"code": "4402", "success": False},                                       # the app signs out here
+        {"code": "0000", "success": True, "data": {"token": "new", "refreshToken": "refresh2"}},
+        {"code": "0000", "success": True, "data": page},
+    ])
+    client._persist = AsyncMock()
+
+    async def run():
+        await client.load()
+        client._session.main_token, client._session.main_refresh_token = "old", "refresh"
+        return await client.get_alarms("VIN")
+
+    assert asyncio.run(run()) == page
+    calls = client._main_call.await_args_list
+    assert [c.args[0] for c in calls] == ["/icv/api/alarm/page/sec", "/iam/api/user/token/refresh/sec",
+                                          "/icv/api/alarm/page/sec"]
+    assert calls[2].kwargs["authorization"] == "new"
+    assert client.last_account_refresh[1] is True
+
+
+def test_a_refused_refresh_ends_the_alert_list_and_is_recorded():
+    from test_failures import Response, make_client
+    from gac_connect.errors import AccountSessionEnded
+
+    client, _, _ = make_client(Response(), valid=True)
+    client._main_call = AsyncMock(side_effect=[{"code": "4402", "success": False},
+                                               {"code": "4421", "success": False}])
+
+    async def run():
+        await client.load()
+        client._session.main_token, client._session.main_refresh_token = "old", "refresh"
+        await client.get_alarms("VIN")
+
+    with pytest.raises(AccountSessionEnded):
+        asyncio.run(run())
+    assert client.last_account_refresh[1] is False
+
+
+def test_signed_in_on_another_phone_ends_the_alert_list_without_a_refresh():
+    from test_failures import Response, make_client
+    from gac_connect.errors import AccountSessionEnded
+
+    client, _, _ = make_client(Response(), valid=True)
+    client._main_call = AsyncMock(return_value={"code": "4423", "success": False})
+
+    async def run():
+        await client.load()
+        client._session.main_token, client._session.main_refresh_token = "old", "refresh"
+        await client.get_alarms("VIN")
+
+    with pytest.raises(AccountSessionEnded, match="signed in on another phone"):
+        asyncio.run(run())
+    client._main_call.assert_awaited_once()                # the app's session is left alone
+    assert client.last_account_refresh is None
+
+
+
+@pytest.mark.parametrize("default,path", [(False, "/iov-custom-config/v1/user/oks/config/query"),
+                                          (True, "/iov-custom-config/v1/default/config/query")])
+def test_the_older_standby_setting_is_read_like_the_app(default, path):
+    from test_failures import Response, make_client
+
+    client, _, _ = make_client(Response(), valid=True)
+    client._iov_call = AsyncMock(return_value={"code": 0, "success": True, "data": {"active": 1}})
+
+    async def run():
+        await client.load()
+        return await client.get_standby_config("VIN", default=default)
+
+    assert asyncio.run(run()) == {"active": 1}
+    client._iov_call.assert_awaited_once_with(path, {"vin": "VIN", "type": "oks"}, sensitive={"vin": "VIN"})

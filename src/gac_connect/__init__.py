@@ -8,6 +8,7 @@ from __future__ import annotations
 from .capabilities import Capabilities, Support, equipment_from_capabilities, ranges_from_capabilities
 from .client import GacClient, command_session_id
 from .errors import (
+    AccountSessionEnded,
     AuthError,
     AuthExpiredError,
     CaptchaError,
@@ -60,6 +61,7 @@ __all__ = [
     "RateLimitedError",
     "RegionError",
     "ResponseError",
+    "AccountSessionEnded",
     "__version__",
     "command_session_id",
 ]

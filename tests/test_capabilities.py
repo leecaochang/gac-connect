@@ -129,7 +129,8 @@ def test_an_aion_ut_capability_list_matches_the_car():
     flags = equipment_from_capabilities(_ut_capabilities())
     offered = {"climate", "doors", "windows", "ventilation", "tailgate", "lights", "horn", "battery_precondition",
                "charge_control", "vehicle_power_control", "sterilisation", "seat_1_ventilation", "seat_2_ventilation",
-               "soc", "range_km", "odometer_km", "cabin_temp_c", "outside_temp_c", "aux_voltage", "plugged_in",
+               "soc", "range_km", "odometer_km", "cabin_temp_c", "outside_temp_c", "aux_voltage", "battery_temp_c",
+               "plugged_in",
                "charger_locked", "charger_unlock", "charging", "charge_current_a", "charge_voltage_v", "charge_power_kw",
                "estimated_charge_minutes", "location", "power_on", "anti_theft_on", "locked", "door_open",
                "window_open", "hatch_open", "lights_on", "ac_fan_strength", "ac_compressor_on", "ac_auto_on",

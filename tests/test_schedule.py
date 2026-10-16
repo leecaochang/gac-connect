@@ -16,11 +16,12 @@ def stamp(value):
 
 @pytest.mark.parametrize("hour", range(24))
 @pytest.mark.parametrize("weekly", [0, 127])
-def test_overnight_dates_are_ordered_at_every_hour(hour, weekly):
+def test_overnight_windows_are_dated_open_now_or_next_at_every_hour(hour, weekly):
     now = datetime(2026, 10, 11, hour, tzinfo=ZONE)
     op = window_operation("23:00", "05:00", ZONE, now=now, weekly=weekly)
     start, stop = stamp(op["startTime"]), stamp(op["stopTime"])
-    assert now < start < stop
+    assert start < stop and now < stop
+    assert (start <= now) is (hour < 5 or hour == 23)     # the window open now, else the next one
     assert (stop - start).total_seconds() == 6 * 3600
 
 
@@ -64,13 +65,32 @@ def test_no_days_is_a_one_time_window_sent_in_loop_mode():
                   "startTime": {**dated, "hour": 22, "minute": 6}, "stopTime": {**dated, "hour": 22, "minute": 12}}
 
 
-def test_one_time_overnight_window_is_dated_for_the_next_start():
-    op = window_operation("23:00", "05:00", ZONE, now=datetime(2026, 10, 13, 23, 30, tzinfo=ZONE))
+@pytest.mark.parametrize("now,start,stop", [
+    (datetime(2026, 10, 13, 6, tzinfo=ZONE), "2026-10-13T23:00:00+07:00", "2026-10-14T05:00:00+07:00"),
+    # Open now: dated today, so the car charges at once, as a window set from the console does.
+    (datetime(2026, 10, 13, 23, 30, tzinfo=ZONE), "2026-10-13T23:00:00+07:00", "2026-10-14T05:00:00+07:00"),
+    (datetime(2026, 10, 14, 2, tzinfo=ZONE), "2026-10-13T23:00:00+07:00", "2026-10-14T05:00:00+07:00"),
+])
+def test_one_time_overnight_window_is_dated_open_now_or_next(now, start, stop):
+    op = window_operation("23:00", "05:00", ZONE, now=now)
     assert (op["chargingMode"], op["weeklyReservation"], op["chargingEndType"]) == (2, 0, 0)
-    assert stamp(op["startTime"]).isoformat() == "2026-10-14T23:00:00+07:00"
-    assert stamp(op["stopTime"]).isoformat() == "2026-10-15T05:00:00+07:00"
+    assert stamp(op["startTime"]).isoformat() == start
+    assert stamp(op["stopTime"]).isoformat() == stop
     # A stop after midnight is sent as its time of day plus 24 h, as the app does.
     assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (23 * 3600000, 29 * 3600000)
+
+
+def test_a_one_time_window_already_open_today_starts_now_not_tomorrow():
+    # Sent at 15:24 for 15:00–03:00: charge now until 03:00, not from 15:00 the next day.
+    op = window_operation("15:00", "03:00", ZONE, now=datetime(2026, 10, 14, 15, 24, tzinfo=ZONE))
+    assert stamp(op["startTime"]).isoformat() == "2026-10-14T15:00:00+07:00"
+    assert stamp(op["stopTime"]).isoformat() == "2026-10-15T03:00:00+07:00"
+
+
+def test_a_target_level_window_needs_a_start_still_ahead():
+    # No stop time is sent, so the car cannot tell the window is open: the next 15:00.
+    op = window_operation("15:00", None, ZONE, until_soc=True, now=datetime(2026, 10, 14, 15, 21, tzinfo=ZONE))
+    assert stamp(op["startTime"]).isoformat() == "2026-10-15T15:00:00+07:00"
 
 
 @pytest.mark.parametrize("stop", ["05:00", "23:00", None])

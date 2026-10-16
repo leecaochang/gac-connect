@@ -249,3 +249,36 @@ def test_battery_preconditioning_mode_is_decoded(mode, on):
     assert status.battery_precondition_on is on
     assert status.battery_precondition_mode == (mode if on is not None else None)
     assert status.battery_precondition_status is None
+
+
+def _lights(open_code):
+    return {"lightAccessors": [{"light": 1, "open": -1}, {"light": 2, "open": open_code}, {"light": 3, "open": -1}]}
+
+
+@pytest.mark.parametrize("open_code,on", [(1, True), (-1, False), (0, False), (None, None), ("x", None)])
+def test_headlights_read_light_2_and_minus_one_is_off(open_code, on):
+    # Aion UT: light 2 is 1 at night and -1 in daylight; it is never reported as 0 there.
+    assert VehicleStatus.from_results(_lights(open_code)).headlights_on is on
+    assert VehicleStatus.from_results({"lightAccessors": [{"light": 1, "open": 1}]}).headlights_on is None
+
+
+def test_headlights_are_established_only_once_seen_on():
+    from gac_connect.capabilities import Capabilities, Support
+    caps = Capabilities("Aion UT")
+    caps.observe(VehicleStatus.from_results(_lights(-1)))
+    assert caps.feature("headlights_on").state is not Support.SUPPORTED
+    caps.observe(VehicleStatus.from_results(_lights(1)))
+    assert caps.feature("headlights_on").state is Support.SUPPORTED
+
+
+def test_battery_temperature_follows_the_battery_report():
+    status = VehicleStatus.from_results({"batteryAccessors": [{"battery": 1, "temperature": 30.5, "voltage": 12.8}]})
+    assert (status.battery_temp_c, status.aux_voltage) == (30.5, 12.8)
+
+
+@pytest.mark.parametrize("mode,on", [(1, True), (0, False), (-1, None), (None, None)])
+def test_sterilisation_follows_the_antivirus_mode(mode, on):
+    # Aion UT, app-started sterilisation: mode 1 with the A/C running hot; 0 once stopped.
+    air = {"airConditionAntivirusMode": mode} if mode is not None else {}
+    assert VehicleStatus.from_results({"airConditionAccessors": [air]}).sterilisation_on is on
+

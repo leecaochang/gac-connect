@@ -33,9 +33,9 @@ def test_public_schedule_helpers_share_validation_and_construction():
     assert validate_clock("23:00") == "23:00"
     assert validate_weekly(1.0) == 1
     zone = ZoneInfo("Asia/Bangkok")
-    operation = window_operation("23:00", "05:00", zone, now=datetime(2026, 10, 11, 23, tzinfo=zone))
-    assert operation["startTime"]["day"] == 12
-    assert operation["stopTime"]["day"] == 13
+    operation = window_operation("23:00", "05:00", zone, now=datetime(2026, 10, 11, 22, tzinfo=zone))
+    assert operation["startTime"]["day"] == 11
+    assert operation["stopTime"]["day"] == 12
 
 
 @pytest.mark.parametrize("value", [True, -1, 128, 1.5, "1", float("nan"), float("inf")])

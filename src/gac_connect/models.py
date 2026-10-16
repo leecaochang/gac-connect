@@ -12,7 +12,8 @@ with the gateway's quirks resolved:
 * lock uses the gateway's inverted polarity (0 = locked), decoded to a bool;
 * openMode 0 = closed, >0 = open, negative = unknown;
 * the A/C is "on" when the compressor flag is set or the fan is running;
-* powerMode 0 = off and 2 = on, verified with Aion UT reports; other codes stay unknown;
+* powerMode 0 = off, 1 = on while stationary and 2 = on (driving, or Power Hold), verified
+  with Aion UT reports; other codes stay unknown;
 * current, charge time, range, cabin temperature and openings whose ``…Flag``
   companion is explicitly 0/false are not valid → None (a missing flag counts as valid);
 * chargingMode follows the app: 0 immediately, 1 once, 2 loop;
@@ -171,7 +172,16 @@ def _timestamp_clock(value: Any) -> str | None:
         return None
 
 
+def _window_not_set(chg: dict) -> bool:
+    """The car's placeholder for no window (the app's "Charging time is not set"):
+    both times 0 and neither calendar field a real date."""
+    return (all(_exact_int(chg.get(key)) == 0 for key in ("dailyReservationStartTime", "dailyReservationStopTime"))
+            and not any(_calendar_clock(chg.get(key)) for key in ("startTime", "stopTime")))
+
+
 def _reservation_format(chg: dict) -> str | None:
+    if _window_not_set(chg):
+        return None
     values = [_exact_int(chg.get(key)) for key in ("dailyReservationStartTime", "dailyReservationStopTime")]
     if all(value is not None and 0 <= value < _TIME_OF_DAY_MS for value in values):
         return "time_of_day"
@@ -221,6 +231,9 @@ class VehicleStatus:
     outside_temp_c: float | None = None
     pm25: float | None = None
     aux_voltage: float | None = None         # 12 V battery
+    # batteryAccessors temperature: below the outside temperature on an Aion UT, parked or
+    # driving, so most likely the cooled traction battery rather than the 12 V one
+    battery_temp_c: float | None = None
     # location
     latitude: float | None = None
     longitude: float | None = None
@@ -230,6 +243,12 @@ class VehicleStatus:
     window_open: bool | None = None
     hatch_open: bool | None = None           # the boot: every hatch except 1
     hood_open: bool | None = None            # hatch 1, the bonnet
+    # airConditionAccessors airConditionAntivirusMode: 1 while sterilisation runs (the car
+    # also runs the A/C hot), 0 otherwise (Aion UT)
+    sterilisation_on: bool | None = None
+    # lightAccessors light 2: on at night and with the headlights left on (Aion UT). The car
+    # reports -1 rather than 0 while it is off, so -1 reads as off for this light.
+    headlights_on: bool | None = None
     sunroof_open: bool | None = None
     brake_fluid_low: bool | None = None
     tyres: list[Tyre] = field(default_factory=list)
@@ -393,6 +412,9 @@ class VehicleStatus:
         lights = _num(light.get("open"))
         if lights is not None and lights < 0:
             lights = None
+        headlight = next((item for item in _items(results, "lightAccessors")
+                          if isinstance(item, dict) and _exact_int(item.get("light")) == 2), None)
+        headlights_on = {1: True, 0: False, -1: False}.get(_exact_int(headlight.get("open"))) if headlight else None
         weekly = _exact_int(chg.get("weeklyReservation"))
         if weekly is not None and not 0 <= weekly <= 127:
             weekly = None
@@ -432,6 +454,8 @@ class VehicleStatus:
             clocks.append(calendar or _hhmm(chg.get(time_key)) or timestamp)
             if calendar is not None and timestamp is not None:
                 comparisons.append(calendar == timestamp)
+        if _window_not_set(chg):
+            clocks = [None, None]
         end_type = _exact_int(chg.get("chargingEndType"))
         range_km = _bounded(drv.get("remainVoyageCourse"), 0) if _not_invalid(drv, "remainVoyageCourseFlag") else None
         cabin_temp = _num(env.get("temperatureInsideCar")) if _not_invalid(env, "temperatureInsideCarFlag") else None
@@ -439,7 +463,7 @@ class VehicleStatus:
         return cls(
             online=online if isinstance(online, bool) else {0: False, 1: True}.get(_exact_int(online)),
             updated_ms=stamp,
-            power_on={0: False, 2: True}.get(vehicle_power),
+            power_on={0: False, 1: True, 2: True}.get(vehicle_power),
             power_mode=vehicle_power,
             soc=round(soc * 100, 1) if soc is not None else None,
             range_km=range_km,
@@ -457,6 +481,7 @@ class VehicleStatus:
             outside_temp_c=_num(env.get("temperatureOutsideCar")),
             pm25=_bounded(env.get("pm25"), 0),
             aux_voltage=_bounded(bat.get("voltage"), 0),
+            battery_temp_c=_num(bat.get("temperature")),
             latitude=_bounded(pos.get("latitude"), -90, 90),
             longitude=_bounded(pos.get("longitude"), -180, 180),
             locked=locked,
@@ -464,6 +489,8 @@ class VehicleStatus:
             window_open=any_open("windowAccessors", "openMode"),
             hatch_open=hatch_open(hood=False),
             hood_open=hatch_open(hood=True),
+            headlights_on=headlights_on,
+            sterilisation_on={0: False, 1: True}.get(_exact_int(air.get("airConditionAntivirusMode"))),
             brake_fluid_low=brake_fluid_low(),
             sunroof_open=any_open("sunroofAccessors", "openMode"),
             tyres=tyres,

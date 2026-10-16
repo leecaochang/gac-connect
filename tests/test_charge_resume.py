@@ -6,6 +6,7 @@ import pytest
 
 from gac_connect import vehicle
 from gac_connect.errors import CommandError
+from gac_connect.models import ChargingMode, VehicleStatus
 from test_failures import Response, make_client
 
 RESERVATION = "/iov-vehicle-gateway/v1/platform/vehicle/access_gateway/charging/reservation"
@@ -111,6 +112,21 @@ def test_a_later_report_without_a_window_keeps_the_last_usable_one():
 def test_unusable_reports_give_no_window(charging):
     assert vehicle.reported_window(charging) is None
 
+
+
+def test_the_not_set_placeholder_is_no_window():
+    # The car's report once a one-time window is gone (the app: "Charging time is not set").
+    placeholder = {"chargingMode": 1, "dailyReservationStartTime": 0, "dailyReservationStopTime": 0,
+                   "weeklyReservation": 0, "chargingEndType": 0,
+                   "startTime": {"year": 2000, "month": 0, "day": 0, "hour": 0, "minute": 0, "second": 0},
+                   "stopTime": {"year": 2000, "month": 0, "day": 0, "hour": 0, "minute": 1, "second": 0}}
+    assert vehicle.reported_window(placeholder) is None
+    status = VehicleStatus.from_results({"chargingAccessors": [placeholder]})
+    assert (status.charge_window_start, status.charge_window_stop, status.charge_time_format) == (None, None, None)
+    assert status.charging_mode is ChargingMode.SCHEDULED
+    midnight = {**placeholder, "dailyReservationStopTime": 3_600_000}     # a real 00:00–01:00 window stays
+    assert vehicle.reported_window(midnight) is not None
+    assert VehicleStatus.from_results({"chargingAccessors": [midnight]}).charge_window_stop == "01:00"
 
 def test_reported_window_drops_malformed_parts():
     window = vehicle.reported_window({

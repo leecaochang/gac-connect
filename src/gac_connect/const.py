@@ -7,6 +7,8 @@ from typing import Final
 # Main account API and the IoV vehicle gateway are two separate backends with
 # two separate crypto profiles.
 IOV_PREFIX: Final = "/iov-vehicle-gateway/v1/platform/vehicle/access_gateway"
+# The app's way to read a command result without the push feed (GAC 2.0.32); note /iov/, not /platform/.
+IOV_POLL_RESULT: Final = "/iov-vehicle-gateway/v1/iov/vehicle/access_gateway/poll_access_response"
 
 # Both hosts are built from a per-country prefix, so the table holds prefixes
 # instead of repeating two long names 56 times. Each country has a main API prefix

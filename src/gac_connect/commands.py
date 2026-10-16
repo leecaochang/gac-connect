@@ -4,13 +4,12 @@ Each command names a gateway path, a body ``kind``, whether it needs the
 remote-control PIN, and whether it is in the ``stable`` support tier (the rest
 are best-effort and may not apply to every model). The body shapes:
 
-* ``read`` / ``flat`` → ``{"vin": …, **overrides}``
+* ``read`` / ``flat`` → ``{"vin": …, **ops, **overrides}``
 * ``ops``            → ``{"identifier": {"vin": …}, "operations": [{…ops, **overrides}]}``
 * ``seat``           → ``ops`` with identifier ``grade=2`` and ``duration=30``
 * ``air``            → ``ops`` with identifier ``grade=2`` and the requested duration
 * ``air-adjust``     → ``ops`` with identifier ``grade=2``, without starting a timed run
 * ``flat-ops``       → ``{"vin": …, "operations": [{…ops, **overrides}]}``
-* ``anti``           → ``{"identifier": {"vin": …}, "currentDuration": 30, **overrides}``
 
 PIN-gated commands are listed for completeness but the client refuses them until
 PIN support lands.
@@ -30,7 +29,7 @@ _AIR = {"enableAutoMode": 1, "temperature": 24.0, "temperatureUnit": 0}
 class Command:
     name: str
     path: str
-    kind: str              # read | flat | ops | seat | air | air-adjust | flat-ops | anti
+    kind: str              # read | flat | ops | seat | air | air-adjust | flat-ops
     pin: bool = False
     stable: bool = False
     category: str = ""
@@ -61,12 +60,13 @@ CATALOG: dict[str, Command] = {c.name: c for c in [
     Command("aircon-temperature", _p("air_condition/open"), "air-adjust", category="climate",
             description="adjust running A/C temperature without requesting Auto",
             ops={"temperature": 24.0, "temperatureUnit": 0}),
-    # GAC 2.0.32 sterilisation (hot-air antivirus) endpoints. The body and the unit of
-    # currentDuration are unverified; capability metadata advertises 60–3600 (seconds).
-    Command("antivirus-on", _p("control_air_condition_antivirus/on"), "anti", category="climate",
-            description="cabin sterilisation on (unverified)"),
+    # GAC 2.0.32 sterilisation (hot-air antivirus), as the app's dispatcher 0x81cefc sends it:
+    # a flat body with grade 2 and a 30-minute run. Off ({"vin"}) stopped an app-started run
+    # on an Aion UT; the car then reports airConditionAntivirusMode 0.
+    Command("antivirus-on", _p("control_air_condition_antivirus/on"), "flat", category="climate",
+            description="cabin sterilisation on", ops={"grade": 2, "duration": 30}),
     Command("antivirus-off", _p("control_air_condition_antivirus/off"), "flat", category="climate",
-            description="cabin sterilisation off (unverified)"),
+            description="cabin sterilisation off"),
     Command("ventilate-on", _p("ventilate_mode/open"), "flat", stable=True, category="climate",
             description="cabin ventilation on"),
     Command("ventilate-off", _p("ventilate_mode/close"), "flat", category="climate", description="cabin ventilation off"),
@@ -246,10 +246,7 @@ def build_body(cmd: Command, vin: str, overrides: dict[str, Any] | None = None) 
     """
     overrides = overrides or {}
     if cmd.kind in ("read", "flat"):
-        return {**overrides, "vin": vin}
-    if cmd.kind == "anti":
-        extra = {k: v for k, v in overrides.items() if k != "identifier"}
-        return {"identifier": {"vin": vin}, "currentDuration": 30, **extra}
+        return {**cmd.ops, **overrides, "vin": vin}
     if cmd.kind == "ops":
         return {"identifier": {"vin": vin}, "operations": [{**cmd.ops, **overrides}]}
     if cmd.kind in ("air", "air-adjust"):

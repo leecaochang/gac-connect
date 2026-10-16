@@ -42,7 +42,7 @@ READINGS = frozenset({
     "charge_current_a", "charge_voltage_v", "charge_power_kw", "estimated_charge_minutes",
     "charge_window_start", "charge_window_stop", "charge_weekly", "charging_mode", "updated_ms",
     "plugged_in", "charging", "locked", "door_open", "window_open", "hatch_open", "hood_open", "online",
-    "brake_fluid_low",
+    "brake_fluid_low", "battery_temp_c", "headlights_on", "sterilisation_on",
     "charger_locked", "sunroof_open", "steering_heat_on", "lights_on", "ac_on", "ac_target_temp_c",
     "fridge_mode", "fridge_temp_c", "fridge_keep_mode", "fridge_keep_minutes", "latitude", "longitude",
     *(f"tyre_{i}_{kind}" for i in range(1, 5) for kind in ("pressure", "temperature")),
@@ -89,6 +89,9 @@ COMMAND_FEATURES = {
        for i in range(1, 5) for direction in ("on", "off")},
 }
 FEATURES = READINGS | EQUIPMENT_READINGS.keys()
+# An off reading proves nothing for these: an Aion UT reports a light that is off the
+# same way as one that is not fitted, so only a light seen on establishes it.
+_SEEN_WHEN_ON = frozenset({"headlights_on"})
 
 # The car's capability list (GacClient.get_control_capabilities). Each group has a
 # controlCapability switch: 0 means the group is not available, and its other values
@@ -104,6 +107,7 @@ _CAPABILITY_FEATURES: dict[str, tuple[str, str, tuple[int, ...]]] = {
     "ac_auto_on": ("airConditionCapabilities", "enableAutoModeCapability", _READ),
     "ac_compressor_on": ("airConditionCapabilities", "enableAirCompressorCapability", _READ),
     "sterilisation": ("airConditionCapabilities", "airConditionAntivirusModeCapability", _CONTROL),
+    "sterilisation_on": ("airConditionCapabilities", "airConditionAntivirusModeCapability", _READ),
     "doors": ("doorCapabilities", "lockCapability", _CONTROL),
     "locked": ("doorCapabilities", "lockCapability", _READ),
     "door_open": ("doorCapabilities", "openModeCapability", _READ),
@@ -149,6 +153,7 @@ _CAPABILITY_FEATURES: dict[str, tuple[str, str, tuple[int, ...]]] = {
     "range_km": ("drivingOverviewCapabilities", "remainVoyageCourseCapability", _READ),
     "odometer_km": ("drivingOverviewCapabilities", "totalVoyageCourseCapability", _READ),
     "aux_voltage": ("batteryCapabilities", "voltageCapability", _READ),
+    "battery_temp_c": ("batteryCapabilities", "temperatureCapability", _READ),
     "anti_theft_on": ("antiTheftCapabilities", "enableCapability", _READ),
     "latitude": ("positionCapabilities", "latitudeCapability", _READ),
     "longitude": ("positionCapabilities", "longitudeCapability", _READ),
@@ -342,7 +347,10 @@ class Capabilities:
         """Remember usable decoded readings, including explicit zero/off values."""
         before = self.export_state()
         for field in READINGS:
-            if not field.startswith(("tyre_", "seat_")) and _known(getattr(status, field, None)):
+            value = getattr(status, field, None)
+            if field in _SEEN_WHEN_ON and value is not True:
+                continue
+            if not field.startswith(("tyre_", "seat_")) and _known(value):
                 self._readings.add(field)
         # Match API IDs, never array order. The decoder already rejects flags,
         # invalid/duplicate IDs and paired unreported tyre placeholders.
