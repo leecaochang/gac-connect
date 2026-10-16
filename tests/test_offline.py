@@ -77,6 +77,35 @@ def test_uk_iov_keypair_fingerprints():
     assert uk.iov_hmac == b"uk-intl-pro"
 
 
+def test_uk_iov_request_sealed_to_response_key_with_192_bit_aes():
+    """UK IoV requests are sealed to the iov_response keypair, the same one its
+    responses decrypt with, using a 24-byte (AES-192) session key instead of the
+    usual 32-byte (AES-256) one. Other profiles are unaffected: a default
+    profile's iov_response is the same object as iov, and its AES key size for
+    a freshly drawn request envelope is still 32 bytes."""
+    from gac_connect.const import PROFILE_IOV_REQUEST_KEY_SIZE
+    from gac_connect.crypto import decrypt_envelope, encrypt_envelope
+    from gac_connect.keys import load_material
+
+    try:
+        intl = load_material("_material.pem")
+        uk = load_material("_material_uk.pem")
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+
+    assert PROFILE_IOV_REQUEST_KEY_SIZE.get("uk") == 24
+    assert PROFILE_IOV_REQUEST_KEY_SIZE.get("intl", 32) == 32
+
+    wrapper, key, _ = encrypt_envelope(
+        {"ticket": "x"}, uk.iov_response.public, key_size=PROFILE_IOV_REQUEST_KEY_SIZE.get("uk", 32)
+    )
+    assert len(key) == 24
+    assert decrypt_envelope(wrapper, uk.iov_response.private) == {"ticket": "x"}
+
+    _, intl_key, _ = encrypt_envelope({"ticket": "x"}, intl.iov_response.public)
+    assert len(intl_key) == 32
+
+
 def test_status_decoding():
     from gac_connect.models import ChargingMode, VehicleStatus
     results = {
@@ -146,6 +175,10 @@ async def test_client_constructs():
             # the UK (My AION) profile under "3".
             assert c._iov_app_id == "2"
             assert GacClient("GB", http)._iov_app_id == "3"
+            # IoV request AES key size is also per profile: 32 bytes (AES-256)
+            # by default, 24 (AES-192) for the UK profile.
+            assert c._iov_request_key_size == 32
+            assert GacClient("GB", http)._iov_request_key_size == 24
             assert GacClient("GR", http).region == "GR"
             assert GacClient("IL", http).timezone == "Asia/Jerusalem"
             # a country spanning several zones can be told which one the car is in

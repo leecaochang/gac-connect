@@ -130,6 +130,11 @@ IOV_APP_ID: Final = "2"
 # JWT), and exchanging a UK ticket under "2" is rejected with "ticket check
 # fail". Anything unlisted falls back to IOV_APP_ID.
 PROFILE_IOV_APP_ID: Final[dict[str, str]] = {"intl": "2", "uk": "3"}
+# AES key size (bytes) for an IoV request body, per profile. GAC International
+# uses a 32-byte key (AES-256); My AION (UK) seals its IoV requests with a
+# 24-byte key (AES-192) instead, even though its IoV responses stay AES-256.
+# Anything unlisted falls back to 32.
+PROFILE_IOV_REQUEST_KEY_SIZE: Final[dict[str, int]] = {"uk": 24}
 IOV_VERSION: Final = "v1"
 USER_AGENT: Final = "Dart/3.7 (dart:io)"
 

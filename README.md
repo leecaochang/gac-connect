@@ -155,11 +155,11 @@ keys**. The library reaches them through a per-region "profile" (see
 
 - **United Kingdom** — AION Auto UK (`app-api.aionauto.co.uk`) is its own
   platform, served by the My AION app with its own key material and its own IoV
-  app id (3). `region="GB"` selects that profile: it
-  targets `app-api.aionauto.co.uk`, signs IoV requests with the My AION HMAC
-  secret, encrypts them with the My AION request key, and decrypts responses
-  with the My AION response key. UK sign-in is still awaiting end-to-end
-  confirmation from a UK user.
+  app id (3). `region="GB"` selects that profile: it targets
+  `app-api.aionauto.co.uk`, signs IoV requests with the My AION HMAC secret, and
+  seals IoV requests and responses to the same My AION keypair, with a smaller
+  AES session key on the request than on the response. UK sign-in is still
+  awaiting end-to-end confirmation from a UK user.
 - **Mainland China** — the domestic Aion app is a separate build too; not
   supported.
 
@@ -271,6 +271,13 @@ EV brands into Home Assistant and Python, among them:
 Thanks to their authors for showing what a good community integration looks like.
 
 ## Changes
+
+- **0.4.0b6** — UK (`GB`) IoV requests now seal to the same keypair the gateway
+  uses for IoV responses, with a 24-byte (AES-192) session key instead of the
+  usual 32-byte (AES-256) one; 0.4.0b4/b5 encrypted the request to a separate
+  keypair, which the gateway could sign-check but not decrypt, returning
+  `decrypt error`. Other regions are unchanged. Awaiting end-to-end
+  confirmation from a UK user.
 
 - **0.4.0b5** — UK (`GB`) IoV crypto is now entirely its own, not GAC
   International's. The shared IoV gateway validates the signature per app id, and

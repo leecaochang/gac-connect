@@ -20,7 +20,7 @@ from .errors import (
 from .limits import DEFAULT_LIMITER, Limiter
 from .push import BrokerInfo, PushClient, PushResult, interpret
 
-__version__ = "0.4.0b5"
+__version__ = "0.4.0b6"
 
 __all__ = [
     "AuthError",

@@ -2,8 +2,8 @@
 
 Every request body is wrapped as ``{"encryptKey", "encryptData"}``:
 
-* a random 32-byte AES key + 16-byte IV encrypt the JSON body with AES-256-CBC
-  (PKCS7) into ``encryptData``;
+* a random AES key (32 bytes/AES-256, usually; some calls use 24/AES-192) + a
+  16-byte IV encrypt the JSON body with AES-CBC (PKCS7) into ``encryptData``;
 * ``key + b"@DS@" + iv`` is RSA-PKCS1v1.5 wrapped to the endpoint's public key
   into ``encryptKey``.
 
@@ -34,10 +34,11 @@ def _compact(body: Any) -> bytes:
     return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
 
 
-def _random_key_iv() -> tuple[bytes, bytes]:
+def _random_key_iv(key_size: int = 32) -> tuple[bytes, bytes]:
     # The client draws its session key/iv from an alphanumeric alphabet (not raw
-    # bytes); keep that so the wire format matches exactly.
-    key = "".join(secrets.choice(_ALPHABET) for _ in range(32)).encode()
+    # bytes); keep that so the wire format matches exactly. key_size is the AES
+    # key length in bytes (32 = AES-256, the usual case; some calls use AES-192).
+    key = "".join(secrets.choice(_ALPHABET) for _ in range(key_size)).encode()
     iv = "".join(secrets.choice(_ALPHABET) for _ in range(16)).encode()
     return key, iv
 
@@ -69,11 +70,14 @@ def encrypt_envelope(
     *,
     key: bytes | None = None,
     iv: bytes | None = None,
+    key_size: int = 32,
 ) -> tuple[dict[str, str], bytes, bytes]:
     """Return ``(wrapper, key, iv)``. The key/iv are returned so the same pair can
-    encrypt sensitive header fields for this request."""
+    encrypt sensitive header fields for this request. ``key_size`` is the AES key
+    length in bytes for a freshly drawn key/iv; ignored if ``key``/``iv`` are
+    given."""
     if key is None or iv is None:
-        key, iv = _random_key_iv()
+        key, iv = _random_key_iv(key_size)
     encrypted_data = aes_cbc_encrypt(key, iv, _compact(body))
     encrypted_key = public_key.encrypt(key + _SEP + iv, padding.PKCS1v15())
     wrapper = {

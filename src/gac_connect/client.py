@@ -50,6 +50,7 @@ from .const import (
     IOV_VERSION,
     MAIN_APP_ID,
     PROFILE_IOV_APP_ID,
+    PROFILE_IOV_REQUEST_KEY_SIZE,
     PROFILE_MATERIAL,
     REGIONS,
     SSO_SERVICE_ID,
@@ -114,6 +115,7 @@ class GacClient:
         self._m = material or load_material(PROFILE_MATERIAL[profile])
         # The IoV subsystem runs under a per-profile app id (My AION UK uses "3").
         self._iov_app_id = PROFILE_IOV_APP_ID.get(profile, IOV_APP_ID)
+        self._iov_request_key_size = PROFILE_IOV_REQUEST_KEY_SIZE.get(profile, 32)
         self._session = Session(region=region)
         self._captcha: Captcha | None = None
         # Every request passes the process-wide limiter; a caller's own limiter (for
@@ -201,7 +203,12 @@ class GacClient:
 
     async def _iov_call(self, path: str, body: Any, *, sensitive: dict[str, str] | None = None,
                         kind: str = "request") -> Any:
-        wrapper, key, iv = encrypt_envelope(body, self._m.iov.public)
+        # Requests are sealed to the same keypair the gateway encrypts IoV
+        # responses with, not a separate request keypair; only the AES key size
+        # differs per profile (see PROFILE_IOV_REQUEST_KEY_SIZE).
+        wrapper, key, iv = encrypt_envelope(
+            body, self._m.iov_response.public, key_size=self._iov_request_key_size
+        )
         headers = {
             "user-agent": USER_AGENT, "fnc-app-type": "android", "locale": "en",
             "fnc-fnc-os-version-type": "2.0.25", "fnc-request-id": _request_id(),
