@@ -301,6 +301,12 @@ Thanks to their authors for showing what a good community integration looks like
   result reads. Fixes: a refresh no longer overwrites a sign-in saved meanwhile; a
   partial vehicle-session reply is rejected; an undecryptable reply or a refused status
   read is an error; `locked` needs all four doors; a malformed alert page is an error.
+- **0.4.0b6** — UK (`GB`) IoV requests now seal to the same keypair the gateway
+  uses for IoV responses, with a 24-byte (AES-192) session key instead of the
+  usual 32-byte (AES-256) one; 0.4.0b4/b5 encrypted the request to a separate
+  keypair, which the gateway could sign-check but not decrypt, returning
+  `decrypt error`. Other regions are unchanged. Awaiting end-to-end
+  confirmation from a UK user.
 
 - **0.4.0b5** — UK (`GB`) IoV crypto is now entirely its own, not GAC
   International's. The shared IoV gateway validates the signature per app id, and

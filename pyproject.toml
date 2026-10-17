@@ -67,6 +67,9 @@ ignore = ["S101", "S311", "S105"]
 "src/gac_connect/commands.py" = ["E501"]
 # Tests set sys.path before importing and keep fixtures inline.
 "tests/*" = ["S105", "S106", "E402", "E501", "E701", "E702", "I001"]
+# Diagnostic scripts that intentionally try SHA1/OAEP and several key loaders.
+"scripts/uk_crypto_probe.py" = ["S303", "S112"]
+"scripts/uk_walkthrough.py" = ["S303", "S112"]
 
 [tool.mypy]
 python_version = "3.11"

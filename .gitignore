@@ -1,5 +1,7 @@
 # Local-only maintainer tooling (kept out of the published repo)
 scripts/build_material.py
+scripts/uk_crypto_probe.py
+scripts/uk_walkthrough.py
 material.txt
 keys/
 
