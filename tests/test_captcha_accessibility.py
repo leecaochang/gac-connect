@@ -1,6 +1,4 @@
-import ast
 from html.parser import HTMLParser
-from pathlib import Path
 
 
 class Page(HTMLParser):
@@ -14,10 +12,10 @@ class Page(HTMLParser):
 
 
 def test_captcha_controls_have_names_help_and_live_status():
-    source = Path(__file__).resolve().parents[1] / "src/gac_connect/cli.py"
-    tree = ast.parse(source.read_text())
-    html = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
-                and any(isinstance(target, ast.Name) and target.id == "_PAGE" for target in node.targets))
+    from gac_connect.puzzle import page as puzzle_page
+
+    html = puzzle_page("Home Assistant")
+    assert "__HOST__" not in html and "return to Home Assistant" in html
     page = Page(html)
     tags = {attrs["id"]: attrs for _, attrs in page.tags if "id" in attrs}
     assert any(tag == "html" and attrs.get("lang") == "en" for tag, attrs in page.tags)

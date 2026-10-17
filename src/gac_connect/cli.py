@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import queue
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,65 +20,50 @@ except ModuleNotFoundError as exc:  # pragma: no cover
 
 import aiohttp
 
-from .auth import Captcha
+from . import puzzle
 from .client import GacClient
-from .errors import CaptchaError, LoginError
+from .puzzle import PuzzleSession
 from .session import FileStore
 
 app = typer.Typer(add_completion=False, help="Unofficial GAC / Aion client.")
 SESSION = Path.home() / ".config" / "gac-connect" / "session.json"
 
-_PAGE = """<!doctype html><html lang="en"><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GAC verification</title>
-<style>body{font-family:system-ui;background:#111;color:#eee;display:flex;flex-direction:column;
-align-items:center;gap:14px;padding:28px 4px;margin:0;box-sizing:border-box}.st{position:relative;width:310px;height:155px;background:#000;
-border-radius:8px;overflow:hidden}.st img{position:absolute;top:0;left:0}input{width:310px}
-button{font-size:16px;padding:9px 22px;border:0;border-radius:9px;background:#2e7d32;color:#fff}h1{font-size:1.2rem}#help,.m{max-width:42ch;line-height:1.5}input:focus-visible,button:focus-visible{outline:3px solid #a5d6a7;outline-offset:4px}</style>
-<h1>Slide the piece into the gap</h1><div class=st><img id=b width=310 height=155 alt="Verification puzzle with a missing piece"><img id=p alt="Movable puzzle piece"></div>
-<label for=s>Puzzle piece position</label>
-<input id=s type=range min=0 max=263 step=1 value=0 aria-describedby=help><div id=help>Drag the piece into the gap, then Verify. Focus the slider and use the arrow keys to move one pixel.</div>
-<button id=g>Verify</button>
-<div class=m id=m role=status aria-live=polite aria-atomic=true>Loading puzzle…</div><script>const s=document.getElementById('s'),p=document.getElementById('p'),
-b=document.getElementById('b'),g=document.getElementById('g'),m=document.getElementById('m');
-let a=0,d=0;const u=()=>{p.style.left=s.value+'px'};s.oninput=u;
-async function q(){if(d)return;const t=await(await fetch('/state')).json();if(t.a!=a){a=t.a;b.src='data:image/png;base64,'+t.b;
-p.src='data:image/png;base64,'+t.p;s.value=0;u();g.disabled=false;m.textContent=a>1?'New puzzle (try '+a+')':'Puzzle ready.'}
-if(t.s=='ok'){d=1;g.disabled=true;m.textContent='Verified. Back to the terminal.';return}
-if(t.s=='failed'){d=1;m.textContent=t.m;return}setTimeout(q,400)}
-g.onclick=async()=>{g.disabled=true;await fetch('/submit',{method:'POST',body:JSON.stringify({x:+s.value})})};q();</script></html>"""
+class _PuzzlePage:
+    """Serves the shared puzzle page on 127.0.0.1 and hands each Verify to the session."""
 
-
-class _Puzzle:
-    def __init__(self) -> None:
-        self.state = {"s": "pending", "a": 0, "b": "", "p": "", "m": ""}
-        self.q: queue.Queue[int] = queue.Queue()
-        self.lock = threading.Lock()
-        o = self
+    def __init__(self, session: PuzzleSession, loop: asyncio.AbstractEventLoop) -> None:
+        html = puzzle.page("the terminal").encode()
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a): pass
+
+            def _reply(self, status: int, body: bytes, kind: str) -> None:
+                self.send_response(status)
+                self.send_header("content-type", kind)
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_GET(self):
-                if self.path == "/state":
-                    with o.lock:
-                        body = json.dumps(o.state).encode()
+                if "state=1" in self.path:
+                    state = session.state()
+                    self._reply(200, json.dumps(state).encode(), "application/json")
                 else:
-                    body = _PAGE.encode()
-                self.send_response(200); self.end_headers(); self.wfile.write(body)
+                    self._reply(200, html, "text/html; charset=utf-8")
+
             def do_POST(self):
                 n = int(self.headers.get("content-length") or 0)
-                o.q.put(int(json.loads(self.rfile.read(n) or b"{}").get("x", 0)))
-                self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+                try:
+                    data = json.loads(self.rfile.read(n) or b"{}")
+                    x = puzzle.offset(data.get("x") if isinstance(data, dict) else None)
+                except ValueError:
+                    self._reply(400, b'{"ok": false}', "application/json")
+                    return
+                result = asyncio.run_coroutine_threadsafe(session.submit(x), loop).result()
+                self._reply(409 if result.get("busy") else 200, json.dumps(result).encode(), "application/json")
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/"
-
-    def show(self, c: Captcha, a: int) -> None:
-        with self.lock:
-            self.state.update(s="pending", a=a, b=c.background, p=c.piece, m="")
-
-    def done(self, ok: bool, m: str = "") -> None:
-        with self.lock:
-            self.state.update(s="ok" if ok else "failed", m=m)
 
 
 async def _run(coro):
@@ -97,24 +81,17 @@ def login(mobile: str = typer.Option(..., prompt=True), region: str = "AU") -> N
     async def go() -> None:
         async with aiohttp.ClientSession() as http:
             client = _client(http, region)
-            pz = _Puzzle()
-            opened = False
-            for attempt in range(1, 6):
-                captcha = await client.start_captcha()
-                pz.show(captcha, attempt)
-                if not opened:
-                    opened = webbrowser.open(pz.url)
-                    typer.echo(f"Solve the puzzle: {pz.url}")
-                x = await asyncio.to_thread(pz.q.get)
-                try:
-                    await client.request_sms(mobile, x)
-                    pz.done(True)
-                    break
-                except (CaptchaError, LoginError) as exc:
-                    typer.echo(f"  {exc}; new puzzle")
-            else:
+            session = PuzzleSession(client, mobile, await client.start_captcha())
+            pz = _PuzzlePage(session, asyncio.get_running_loop())
+            webbrowser.open(pz.url)
+            typer.echo(f"Solve the puzzle: {pz.url}")
+            while session.status == "pending":
+                await asyncio.sleep(0.3)
+            pz.httpd.shutdown()
+            if session.status == "failed":
+                typer.echo(session.message)
                 raise typer.Exit(1)
-            code = typer.prompt("SMS code")
+            code = await asyncio.to_thread(typer.prompt, "SMS code")
             await client.login_sms(mobile, code)
             typer.echo("Signed in.")
     asyncio.run(go())

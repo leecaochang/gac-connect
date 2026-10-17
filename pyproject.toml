@@ -61,6 +61,8 @@ ignore = ["S101", "S311", "S105"]
 [tool.ruff.lint.per-file-ignores]
 # The CLI's tiny embedded HTTP handler / puzzle page uses compact lines.
 "src/gac_connect/cli.py" = ["E701", "E702", "E501"]
+# The shared puzzle page is compact HTML and script.
+"src/gac_connect/puzzle.py" = ["E501"]
 # The command catalog reads better as aligned single-line entries.
 "src/gac_connect/commands.py" = ["E501"]
 # Tests set sys.path before importing and keep fixtures inline.

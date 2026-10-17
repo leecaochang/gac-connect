@@ -247,8 +247,9 @@ class PushClient:
                 if not info.tls and not self._allow_plaintext:
                     # Retrying cannot help until the caller allows plaintext (a new client).
                     self.refused_plaintext = True
-                    _LOGGER.info("Push channel not used: broker %s:%s is not TLS and plaintext is not "
-                                 "allowed; command results must be polled", info.host, info.port)
+                    # Expected with plaintext off, so DEBUG; callers can show refused_plaintext.
+                    _LOGGER.debug("Push channel not used: broker %s:%s is not TLS and plaintext is not "
+                                  "allowed; command results must be polled", info.host, info.port)
                     return
                 async with aiomqtt.Client(
                     info.host, port=info.port, username=info.username, password=info.password,
