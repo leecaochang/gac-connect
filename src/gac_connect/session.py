@@ -9,11 +9,16 @@ writes wherever your host keeps state (a config entry, a JSON file, memory).
 from __future__ import annotations
 
 import asyncio
+
+try:
+    import fcntl
+except ImportError:     # not POSIX: in-process turns only
+    fcntl = None
 import json
 import os
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -77,18 +82,19 @@ class MemoryStore:
     """A store that keeps the session only in memory (default)."""
 
     def __init__(self, session: Session | None = None) -> None:
-        self._session = session or Session()
+        self._session = replace(session) if session else Session()
 
+    # Copies in and out, as a file would: a caller changing its session never changes what is stored.
     async def load(self) -> Session:
-        return self._session
+        return replace(self._session)
 
     async def save(self, session: Session) -> None:
-        self._session = session
+        self._session = replace(session)
 
     async def replace(self, expected: tuple[str | None, str | None], session: Session) -> Session | None:
         if credential_pair(self._session) != expected:
-            return self._session
-        self._session = session
+            return replace(self._session)
+        self._session = replace(session)
         return None
 
 
@@ -110,11 +116,24 @@ class FileStore:
 
     async def save(self, session: Session) -> None:
         async with self._lock:
-            await _finish(asyncio.to_thread(self._save, session.to_dict()))
+            await _finish(asyncio.to_thread(self._locked, self._save, session.to_dict()))
 
     async def replace(self, expected: tuple[str | None, str | None], session: Session) -> Session | None:
         async with self._lock:
-            return await _finish(asyncio.to_thread(self._replace, expected, session))
+            return await _finish(asyncio.to_thread(self._locked, self._replace, expected, session))
+
+    def _locked(self, work, *args):
+        """Hold an exclusive lock on the file (a sidecar ``.lock``) for one read-compare-write,
+        so separate store objects and separate processes on the same file take turns too."""
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with open(self._path.with_name(self._path.name + ".lock"), "a+") as lock:
+            if fcntl is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                return work(*args)
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def _replace(self, expected: tuple[str | None, str | None], session: Session) -> Session | None:
         try:

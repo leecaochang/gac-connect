@@ -1,6 +1,6 @@
 import asyncio
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from gac_connect.errors import AuthExpiredError, GacError
@@ -645,7 +645,7 @@ def test_background_writers_never_overwrite_a_newer_sign_in(writer):
             await client._establish_iov()
         else:
             client._main_call = _answers({"success": True, "data": {"token": "main2", "refreshToken": "mr2"}})
-            assert await client._refresh_account_token()
+            assert not await client._refresh_account_token()     # its result was not kept, so not a success
         saved = await store.load()
         assert (saved.token, client._session.token) == ("fresh", "fresh")
     asyncio.run(run())
@@ -683,4 +683,128 @@ def test_a_refused_refresh_never_replaces_the_credentials_even_with_tokens_in_it
         with pytest.raises(ResponseError, match="refused"):
             await client._ensure_token()
         assert ((await store.load()).token, client._auth_dead) == ("old", False)
+    asyncio.run(run())
+
+
+class _NewerOnReplace(MemoryStore):
+    """A store where a new sign-in lands just as a background save is compared."""
+
+    def __init__(self, session, newer):
+        super().__init__(session)
+        self.newer, self.entered, self.gate = newer, asyncio.Event(), asyncio.Event()
+
+    async def replace(self, expected, session):
+        await self.save(self.newer)
+        self.entered.set()
+        await self.gate.wait()
+        return await super().replace(expected, session)
+
+
+def test_a_refresh_cancelled_while_adopting_a_new_sign_in_keeps_the_new_sign_in():
+    fresh = Session(token="fresh", refresh_token="fresh-refresh", expire_time=10**14, rexpire_time=10**14,
+                    main_token="fresh-main", main_refresh_token="fresh-main-refresh")
+    store = _NewerOnReplace(Session(token="old", refresh_token="refresh", expire_time=1, rexpire_time=10**14), fresh)
+    http = Mock()
+    http.post.return_value = Response(body=ROTATED)
+    client = GacClient("AU", http, store)
+
+    async def run():
+        await client.load()
+        task = asyncio.create_task(client._ensure_token())
+        await store.entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        store.gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert (client._session.token, client._base) == ("fresh", ("fresh", "fresh-refresh"))
+        store.replace = MemoryStore.replace.__get__(store)          # later writers compare normally
+        client._main_call = _answers({"success": True, "data": {"token": "main2", "refreshToken": "mr2"}})
+        assert await client._refresh_account_token()
+        saved = await store.load()
+        assert (saved.token, saved.main_token) == ("fresh", "main2")    # the new sign-in survives
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("first", ["vehicle", "account"])
+def test_overlapping_vehicle_and_account_rotations_keep_both_new_pairs(first):
+    store = _GatedStore(Session(token="old", refresh_token="refresh", expire_time=1, rexpire_time=10**14,
+                                main_token="old-main", main_refresh_token="old-main-refresh"))
+    http = Mock()
+    http.post.return_value = Response(body=ROTATED)
+    client = GacClient("AU", http, store)
+
+    async def run():
+        await client.load()
+        client._main_call = _answers({"success": True, "data": {"token": "fresh-main",
+                                                                "refreshToken": "fresh-main-refresh"}})
+        start, other = ((client._ensure_token, client._refresh_account_token) if first == "vehicle"
+                        else (client._refresh_account_token, client._ensure_token))
+        one = asyncio.create_task(start())
+        await store.entered.wait()           # the first change is being saved
+        two = asyncio.create_task(other())
+        await asyncio.sleep(0.01)
+        store.gate.set()
+        await asyncio.gather(one, two)
+        saved = await store.load()
+        assert (saved.token, saved.main_token, saved.main_refresh_token) == ("rotated", "fresh-main",
+                                                                              "fresh-main-refresh")
+        assert client._session.token == "rotated" and client._session.main_token == "fresh-main"
+    asyncio.run(run())
+
+
+def test_two_file_stores_on_one_file_take_turns(tmp_path):
+    import threading
+
+    from gac_connect.session import FileStore
+
+    path = tmp_path / "session.json"
+    background, sign_in = FileStore(path), FileStore(path)
+    comparing, release = threading.Event(), threading.Event()
+    original = FileStore._load
+
+    def slow_load(self):
+        current = original(self)
+        if self is background:
+            comparing.set()
+            release.wait(5)                  # compared, about to write
+        return current
+
+    async def run():
+        await background.save(Session(token="old", refresh_token="refresh"))
+        with patch.object(FileStore, "_load", slow_load):
+            rotation = asyncio.create_task(background.replace(("old", "refresh"),
+                                                              Session(token="rotated", refresh_token="next")))
+            await asyncio.to_thread(comparing.wait, 5)
+            login = asyncio.create_task(sign_in.save(Session(token="fresh", refresh_token="fresh-refresh")))
+            await asyncio.sleep(0.05)
+            release.set()
+            await asyncio.gather(rotation, login)
+        assert (await sign_in.load()).token == "fresh"     # the sign-in waited its turn and came last
+    asyncio.run(run())
+
+
+def test_the_memory_store_keeps_its_own_copy_so_renewal_rotates_the_account_token():
+    store = MemoryStore(Session(token="old", refresh_token="refresh", expire_time=10**14, rexpire_time=10**14,
+                                main_token="main", main_refresh_token="main-refresh"))
+    client = GacClient("AU", Mock(), store)
+    calls = []
+
+    async def main_call(path, body, **kwargs):
+        calls.append(path)
+        if path.endswith("/iam/sso/login/sec"):
+            return {"success": True, "data": "TICKET"}
+        return {"success": True, "data": {"token": "main2", "refreshToken": "mr2"}}
+
+    async def run():
+        await client.load()
+        client._main_call = main_call
+        client._iov_call = _answers({"success": True, "data": {"token": "renewed", "refreshToken": "r",
+                                                               "expireTime": 10**14, "rexpireTime": 10**14}})
+        await client._establish_iov()
+        assert any(p.endswith("/token/refresh/sec") for p in calls)     # the account token was rotated
+        saved = await store.load()
+        assert (saved.token, saved.main_token) == ("renewed", "main2")
+        saved.token = "changed by a caller"
+        assert (await store.load()).token == "renewed"
     asyncio.run(run())

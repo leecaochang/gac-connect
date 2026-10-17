@@ -39,7 +39,8 @@ def test_failed_replace_keeps_previous_file_and_cleans_temporary(tmp_path):
         assert (await store.load()).token == "previous"
 
     asyncio.run(run())
-    assert list(tmp_path.iterdir()) == [store._path]
+    # No temporary file is left; the empty .lock beside it is the store's lock file.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["session.json", "session.json.lock"]
 
 
 def test_cancelled_save_finishes_off_loop_before_returning(tmp_path, monkeypatch):

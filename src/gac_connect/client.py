@@ -125,6 +125,12 @@ def _complete_iov_tokens(data: Any) -> bool:
     return True
 
 
+def _iov_fields(d: dict) -> dict:
+    """A vehicle-session reply's tokens as Session fields."""
+    return {"token": d.get("token"), "refresh_token": d.get("refreshToken"),
+            "expire_time": d.get("expireTime"), "rexpire_time": d.get("rexpireTime")}
+
+
 class GacClient:
     def __init__(
         self,
@@ -156,6 +162,7 @@ class GacClient:
         self._iov_app_id = PROFILE_IOV_APP_ID.get(profile, IOV_APP_ID)
         self._session = Session(region=region)
         self._base: tuple | None = None    # the saved pair as this client last saw it (None: not read yet)
+        self._changing = asyncio.Lock()     # one session change (build and save) at a time
         # (time.time(), accepted) of the last account-token refresh, for diagnostics.
         self.last_account_refresh: tuple[float, bool] | None = None
         self._captcha: Captcha | None = None
@@ -196,7 +203,17 @@ class GacClient:
             self._auth_dead = False     # a different (new) session was stored
 
     async def _persist(self, *, sign_in: bool = False) -> bool:
-        return await self._commit(self._session, sign_in=sign_in)
+        async with self._changing:
+            return await self._commit(self._session, sign_in=sign_in)
+
+    async def _change(self, *, sign_in: bool = False, **fields: Any) -> bool:
+        """Change some session fields and save the result, one change at a time.
+
+        The new session is built from the current one when its turn comes, so a vehicle-token
+        rotation and an account-token refresh that overlap keep each other's new tokens.
+        """
+        async with self._changing:
+            return await self._commit(dataclasses.replace(self._session, **fields), sign_in=sign_in)
 
     async def _commit(self, session: Session, *, sign_in: bool = False) -> bool:
         """Save ``session`` unless a new sign-in replaced the saved credentials meanwhile.
@@ -402,10 +419,8 @@ class GacClient:
         # As with a refresh, only a complete session replaces the one held (and saved).
         if (isinstance(sso, dict) and sso.get("success") is False) or not _complete_iov_tokens(d):
             raise LoginError(f"IoV session exchange failed: {_msg(sso)}")
-        self._apply_iov_tokens(d)
-        self._session.expired = False
         self._auth_dead, self._dead_refresh = False, None
-        if not await self._persist(sign_in=sign_in):
+        if not await self._change(sign_in=sign_in, expired=False, **_iov_fields(d)):
             return          # a new sign-in was saved meanwhile; it is used instead
         await self._rotate_account_token()
 
@@ -442,10 +457,8 @@ class GacClient:
                          _safe_result_code(resp.get("code") if isinstance(resp, dict) else None))
             return False
         _LOGGER.info("Refreshed GAC's account token")
-        self._session.main_token = d["token"]
-        self._session.main_refresh_token = d.get("refreshToken") or self._session.main_refresh_token
-        await self._persist()
-        return True
+        return await self._change(main_token=d["token"],
+                                  main_refresh_token=d.get("refreshToken") or self._session.main_refresh_token)
 
     async def _account_call(self, path: str, body: Any) -> Any:
         """An account-API call; an expired account token is refreshed once and the call repeated.
@@ -483,11 +496,6 @@ class GacClient:
                 return True
         return False
 
-    def _apply_iov_tokens(self, d: dict) -> None:
-        self._session.token = d.get("token")
-        self._session.refresh_token = d.get("refreshToken")
-        self._session.expire_time = d.get("expireTime")
-        self._session.rexpire_time = d.get("rexpireTime")
 
     async def _ensure_token(self) -> None:
         """Make sure the IoV token is usable; never sends anything for a dead session."""
@@ -549,23 +557,22 @@ class GacClient:
                 # store and later runs fail locally instead of trying it again; unless a
                 # new sign-in was saved meanwhile, which is then used instead.
                 try:
-                    if not await self._commit(dataclasses.replace(
-                            self._session, token=None, refresh_token=None, expire_time=None, rexpire_time=None,
-                            expired=True)) and not self._session.expired:
+                    if not await self._change(token=None, refresh_token=None, expire_time=None,
+                                              rexpire_time=None, expired=True) and not self._session.expired:
                         return
                 except Exception as exc:  # noqa: BLE001 — the failure below is what matters
                     self._limiters[-1].warn("could not store the expired session: %s", exc)
                 self._auth_dead, self._dead_refresh = True, dead_refresh
                 raise
-            rotated = dataclasses.replace(self._session, token=d.get("token"), refresh_token=d.get("refreshToken"),
-                                          expire_time=d.get("expireTime"), rexpire_time=d.get("rexpireTime"))
             try:
                 # Saved BEFORE any request uses it, unless a new sign-in was saved while
                 # this refresh was out (that one is then used).
-                await self._commit(rotated)
+                await self._change(**_iov_fields(d))
+            except asyncio.CancelledError:
+                raise           # the save ran to its end and its outcome was kept (_commit)
             except BaseException:
-                if self._session is not rotated and credential_pair(self._session) == self._base:
-                    self._session = rotated       # the old pair is spent either way
+                # The save itself failed: the old pair is spent, so hold the rotated one.
+                self._session = dataclasses.replace(self._session, **_iov_fields(d))
                 raise
         finally:
             _REFRESH_GATE.release()
