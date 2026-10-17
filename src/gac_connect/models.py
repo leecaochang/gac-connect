@@ -93,8 +93,8 @@ def _items(res: dict, key: str) -> list:
 # right-hand-drive car (its driver's door and window are number 2).
 POSITIONS = {1: "front_left", 2: "front_right", 3: "rear_left", 4: "rear_right"}
 # lightAccessors light numbers seen on an Aion UT. Either turn indicator and the hazard lights
-# all report as light 6. Light 7 came on once with the high beams; what it is is unknown.
-LIGHTS = {2: "headlights", 3: "high_beam", 5: "rear_fog", 6: "turn_signal"}
+# all report as light 6; light 7 is the brake lights (on with the pedal pressed, 2026-10-17).
+LIGHTS = {2: "headlights", 3: "high_beam", 5: "rear_fog", 6: "turn_signal", 7: "brake_lights"}
 
 
 def _numbered(res: dict, key: str, id_key: str, number: int) -> dict | None:
@@ -309,6 +309,11 @@ class VehicleStatus:
     # batteryAccessors temperature: below the outside temperature on an Aion UT, parked or
     # driving, so most likely the cooled traction battery rather than the 12 V one
     battery_temp_c: float | None = None
+    # drivingOverviewAccessors averageElectricityConsumption: the average of the drive under way,
+    # else the last one, kept while parked (Aion UT, 2026-10-17: from 12.3 a minute into a drive
+    # down to 11.4, the screen's Trip read 11.7; held at 11.8 once switched off). Unit code 0
+    # is kWh/100 km; other codes are not decoded.
+    trip_consumption_kwh_100km: float | None = None
     # location
     latitude: float | None = None
     longitude: float | None = None
@@ -332,12 +337,14 @@ class VehicleStatus:
     # 4 is read as interrupted: GAC's alert list numbers finished 3 and interrupted 4.
     sterilisation_on: bool | None = None
     # lightAccessors (see LIGHTS): light 2 is on with the dipped headlights, 3 with the high
-    # beams, 5 with the rear fog light, 6 with either turn indicator or the hazard lights
-    # (Aion UT). Daytime running lights, side lights and reading lamps are not reported.
+    # beams, 5 with the rear fog light, 6 with either turn indicator or the hazard lights, 7
+    # with the brake lights (Aion UT). Daytime running lights, side lights and reading lamps
+    # are not reported.
     headlights_on: bool | None = None
     high_beam_on: bool | None = None
     rear_fog_on: bool | None = None
     turn_signal_on: bool | None = None
+    brake_lights_on: bool | None = None
     sunroof_open: bool | None = None
     brake_fluid_low: bool | None = None
     tyres: list[Tyre] = field(default_factory=list)
@@ -503,7 +510,9 @@ class VehicleStatus:
         if steering is not None and steering < 0:
             steering = None
         lights = _num(light.get("open"))
-        if lights is not None and lights < 0:
+        if lights == -1:
+            lights = 0      # an Aion UT reports -1 while its lights are off (see _light_on)
+        elif lights is not None and lights < 0:
             lights = None
         lights_by_name = {name: _light_on(_numbered(results, "lightAccessors", "light", number))
                           for number, name in LIGHTS.items()}
@@ -588,6 +597,8 @@ class VehicleStatus:
             pm25=_bounded(env.get("pm25"), 0),
             aux_voltage=_bounded(bat.get("voltage"), 0),
             battery_temp_c=_num(bat.get("temperature")),
+            trip_consumption_kwh_100km=(_bounded(drv.get("averageElectricityConsumption"), 0, 200)
+                                        if _exact_int(drv.get("electricityConsumptionUnit", 0)) == 0 else None),
             latitude=_bounded(pos.get("latitude"), -90, 90),
             longitude=_bounded(pos.get("longitude"), -180, 180),
             locked=locked,
@@ -600,6 +611,7 @@ class VehicleStatus:
             high_beam_on=lights_by_name["high_beam"],
             rear_fog_on=lights_by_name["rear_fog"],
             turn_signal_on=lights_by_name["turn_signal"],
+            brake_lights_on=lights_by_name["brake_lights"],
             sterilisation_on={0: False, 1: True, 3: False, 4: False}.get(
                 _exact_int(air.get("airConditionAntivirusMode"))),
             brake_fluid_low=brake_fluid_low(),

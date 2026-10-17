@@ -280,12 +280,12 @@ def _lamps(*on):
     ((2, 3), {"headlights_on": True, "high_beam_on": True}),     # high beams (with the dipped beams)
     ((2, 5), {"headlights_on": True, "rear_fog_on": True}),       # rear fog light
     ((6,), {"turn_signal_on": True}),                             # either indicator, or the hazard lights
-    ((2, 3, 7), {"headlights_on": True, "high_beam_on": True}),   # light 7: unknown
+    ((7,), {"brake_lights_on": True}),                            # brake pedal pressed
     ((), {}),
 ])
 def test_each_reported_light_reads_on_by_its_number(on, expected):
     status = VehicleStatus.from_results(_lamps(*on))
-    for name in ("headlights_on", "high_beam_on", "rear_fog_on", "turn_signal_on"):
+    for name in ("headlights_on", "high_beam_on", "rear_fog_on", "turn_signal_on", "brake_lights_on"):
         assert getattr(status, name) is expected.get(name, False)
     assert VehicleStatus.from_results({}).high_beam_on is None
 
@@ -340,3 +340,14 @@ def test_charging_status_codes(code, charging):
     status = VehicleStatus.from_results({"chargingAccessors": [{"chargingStatus": code}],
                                          "chargerAccessors": [{"plug": 1, "lock": 0}]})
     assert status.charging is charging
+
+
+@pytest.mark.parametrize("overview,expected", [
+    ({"averageElectricityConsumption": 11.8, "electricityConsumptionUnit": 0}, 11.8),
+    ({"averageElectricityConsumption": 11.8}, 11.8),
+    ({"averageElectricityConsumption": 11.8, "electricityConsumptionUnit": 1}, None),   # unit not decoded
+    ({"averageElectricityConsumption": -1, "electricityConsumptionUnit": 0}, None),
+])
+def test_trip_consumption_reads_the_drive_average_in_kwh_per_100_km(overview, expected):
+    status = VehicleStatus.from_results({"drivingOverviewAccessors": [overview]})
+    assert status.trip_consumption_kwh_100km == expected

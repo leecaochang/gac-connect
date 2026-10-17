@@ -254,7 +254,7 @@ def test_horn_commands():
 def test_lights_state():
     from gac_connect.models import VehicleStatus
     L = lambda v: VehicleStatus.from_results({"lightAccessors": [{"open": v, "light": 1}]}).lights_on  # noqa: E731
-    assert L(1) is True and L(0) is False and L(-1) is None and L("x") is None
+    assert L(1) is True and L(0) is False and L(-1) is False and L(-2) is None and L("x") is None
     assert VehicleStatus.from_results({}).lights_on is None
 
 
