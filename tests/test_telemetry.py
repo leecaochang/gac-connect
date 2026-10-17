@@ -21,7 +21,11 @@ def test_bad_enum_does_not_discard_other_readings(bad):
 
 
 @pytest.mark.parametrize("items,locked,opened", [
-    ([{"lock": "0", "openMode": "0"}], True, False),
+    ([{"lock": "0", "openMode": "0"}], None, False),             # one unnumbered door: not the whole car
+    ([{"door": n, "lock": 0} for n in (1, 2, 3, 4)], True, None),
+    ([{"door": n, "lock": 0} for n in (1, 2)], None, None),       # doors missing
+    ([{"door": 1, "lock": 0}] * 4, None, None),                   # one door repeated
+    ([{"door": n, "lock": 0} for n in (1, 2, 3, "4")], None, None),
     ([{"lock": 0, "openMode": 0}, {"lock": -1, "openMode": -1}], None, None),
     ([{"lock": -1, "openMode": -1}, {"lock": 1, "openMode": 1}], False, True),
     ([None], None, None), ([], None, None), ({"lock": 0}, None, None),

@@ -11,8 +11,10 @@
 
 Design notes:
 
-* Requests are encrypted + signed here; responses are decrypted here. Nothing
-  else in the library does I/O.
+* HTTP requests to GAC are encrypted and signed here, and their replies decrypted
+  here; a reply that cannot be decrypted is an error, never taken at face value.
+  Other I/O lives in its own module: the push feed (``push``), saved sessions
+  (``session``), the request-limit record (``limits``) and the bundled keys (``keys``).
 * The IoV access token lasts ~1 h and is refreshed on demand; the refresh token
   is single-use, so every rotation is persisted before the retry. A spent
   refresh raises :class:`AuthExpiredError` (reauth).
@@ -24,7 +26,8 @@ Design notes:
   COMMAND_BUDGETS for commands), and nothing at all during a cool-down after a
   429. Over a limit the client raises RateLimitedError without sending.
 * Token refreshes are serialised; a refresh that fails for good is remembered,
-  so a dead session is never retried until the next sign-in.
+  so a dead session is never retried until the next sign-in. A refresh never
+  overwrites credentials a new sign-in saved while it was out; it adopts them.
 """
 from __future__ import annotations
 
@@ -118,6 +121,12 @@ def _complete_iov_tokens(data: Any) -> bool:
             continue
         return False
     return True
+
+
+def _replaced(before: Any, after: Any) -> bool:
+    """Whether credentials saved elsewhere (a new sign-in) replaced the pair a refresh started from."""
+    return bool(after.token and after.refresh_token) and (
+        (after.token, after.refresh_token) != (before.token, before.refresh_token))
 
 
 class GacClient:
@@ -224,8 +233,10 @@ class GacClient:
                 raise ResponseError(f"non-JSON response ({resp.status}) from {path}") from exc
             if isinstance(outer, dict) and outer.get("encryptData"):
                 plain = decrypt_envelope(outer, self._response_key(host))
-                if plain is not None:
-                    return plain
+                if plain is None:
+                    # Never fall back to the outer fields: they are not the service's answer.
+                    raise ResponseError(f"encrypted response from {path} could not be decrypted")
+                return plain
             return outer
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ResponseError("Could not reach GAC") from err
@@ -352,7 +363,8 @@ class GacClient:
             raise LoginError(f"SSO ticket exchange failed: {_msg(resp)}")
         sso = await self._iov_call("/sso/login", {"ticket": ticket})
         d = self._data(sso)
-        if not (isinstance(d, dict) and d.get("token")):
+        # As with a refresh, only a complete session replaces the one held (and saved).
+        if (isinstance(sso, dict) and sso.get("success") is False) or not _complete_iov_tokens(d):
             raise LoginError(f"IoV session exchange failed: {_msg(sso)}")
         self._apply_iov_tokens(d)
         self._session.expired = False
@@ -385,7 +397,8 @@ class GacClient:
             authorization=self._session.main_token,
         )
         d = self._data(resp)
-        accepted = bool(self._ok(resp) and isinstance(d, dict) and d.get("token"))
+        accepted = bool(self._ok(resp) and isinstance(d, dict) and isinstance(d.get("token"), str)
+                        and d["token"].strip() and isinstance(d.get("refreshToken") or "", str))
         self.last_account_refresh = (time.time(), accepted)
         if not accepted:
             _LOGGER.info("GAC refused to refresh the account token (result code %s)",
@@ -439,6 +452,17 @@ class GacClient:
         self._session.expire_time = d.get("expireTime")
         self._session.rexpire_time = d.get("rexpireTime")
 
+    async def _adopt_newer(self, started_from: Session) -> bool:
+        """Take credentials saved elsewhere since a refresh began, instead of overwriting them."""
+        latest = await self._store.load()
+        if not _replaced(started_from, latest):
+            return False
+        latest.region = self.region
+        self._session = latest
+        self._auth_dead, self._dead_refresh = False, None
+        _LOGGER.info("Newer saved credentials replaced the ones being refreshed; using them")
+        return True
+
     async def _ensure_token(self) -> None:
         """Make sure the IoV token is usable; never sends anything for a dead session."""
         if self._auth_dead:
@@ -489,6 +513,8 @@ class GacClient:
                 if not _complete_iov_tokens(d):
                     raise ResponseError("refresh response has no usable token; credentials retained")
             except AuthExpiredError:
+                if await self._adopt_newer(stored):
+                    return      # a new sign-in was saved meanwhile: not ours to mark dead
                 if await self._renew_from_account():
                     return
                 self._auth_dead, self._dead_refresh = True, self._session.refresh_token
@@ -503,6 +529,8 @@ class GacClient:
                 raise
             rotated = dataclasses.replace(self._session, token=d.get("token"), refresh_token=d.get("refreshToken"),
                                           expire_time=d.get("expireTime"), rexpire_time=d.get("rexpireTime"))
+            if await self._adopt_newer(stored):
+                return          # a new sign-in was saved while this refresh was out; keep that one
             try:
                 await self._store.save(rotated)   # saved BEFORE any request uses it
             finally:
@@ -581,6 +609,9 @@ class GacClient:
 
     async def get_status(self, vin: str) -> VehicleStatus:
         resp = await self._iov_read(commands.CATALOG["status"].path, {"vin": vin}, sensitive={"vin": vin})
+        if isinstance(resp, dict) and resp.get("success") is False:
+            safe_code = _safe_result_code(resp.get("code"))
+            raise ResponseError(f"vehicle status read was refused (result code {safe_code})")
         data = self._data(resp)
         reports = data.get("results") if isinstance(data, dict) else None
         if not isinstance(reports, list) or not reports or not isinstance(reports[0], dict):

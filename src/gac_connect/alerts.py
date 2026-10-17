@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .errors import ResponseError
+
 # (source, object, reason) -> (key, title)
 ALERT_TYPES: dict[tuple[int, int, int], tuple[str, str]] = {
     (210, 0, 6): ("charging_finished", "Charging finished"),
@@ -126,13 +128,24 @@ def parse_alert(item: Any) -> Alert | None:
     alarm = alarms[-1] if isinstance(alarms, list) and alarms and isinstance(alarms[-1], dict) else {}
     triple = (_int(status.get("alarmSource")), _int(alarm.get("alarmObject")), _int(alarm.get("alarmReason")))
     key, title = ALERT_TYPES.get(triple, (OTHER, "Car alert {}/{}/{}".format(*triple)))  # type: ignore[arg-type]
+    raw_signals = alarm.get("signals")
     signals = tuple(Signal(_int(s.get("signalCode")), _text(s.get("signalDes")), _text(s.get("signalValue"), 32))
-                    for s in alarm.get("signals") or () if isinstance(s, dict))
+                    for s in (raw_signals if isinstance(raw_signals, list) else ()) if isinstance(s, dict))
     return Alert(alert_id, _time(item.get("createTime")), *triple, key, title,
                  _text(alarm.get("alarmMessage")) or _text(status.get("alarmMessage")), signals)
 
 
 def parse_alerts(page: Any) -> list[Alert]:
-    """The records of one alert page (newest first, as GAC lists them)."""
-    items = page.get("list") if isinstance(page, dict) else None
-    return [alert for item in items or () if (alert := parse_alert(item)) is not None]
+    """The records of one alert page (newest first, as GAC lists them).
+
+    Raises ResponseError for a page that is not an alert list, so a malformed reply is
+    never taken for an empty one.
+    """
+    if not isinstance(page, dict):
+        raise ResponseError("the alert list reply is not a page of alerts")
+    items = page.get("list")
+    if items is None:
+        items = []          # an empty page may leave the list out or null
+    if not isinstance(items, list):
+        raise ResponseError("the alert list reply is not a list of alerts")
+    return [alert for item in items if (alert := parse_alert(item)) is not None]

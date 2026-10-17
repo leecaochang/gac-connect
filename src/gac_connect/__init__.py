@@ -30,7 +30,7 @@ from .vehicle import validate_clock, validate_weekly, window_operation
 # GacClient.get_status, without a second normalization pass or client subclass.
 decode_status = VehicleStatus.from_results
 
-__version__ = "0.4.0b11"
+__version__ = "0.5.0"
 
 __all__ = [
     "GacClient",

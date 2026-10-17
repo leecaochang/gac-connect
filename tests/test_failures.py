@@ -471,3 +471,102 @@ def test_command_bodies_are_logged_without_the_vin(caplog):
     asyncio.run(run())
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("command charging/reservation"))
     assert "LGXCE4CB0SA000001" not in line and '"weeklyReservation": 96' in line and '"vin": "<VIN>"' in line
+
+
+@pytest.mark.parametrize("reply", [
+    {"data": {"token": "rotated", "refreshToken": "next", "expireTime": 10**14, "rexpireTime": 10**14}},
+    {"code": "ACCOUNT.0015"},                                   # the old refresh token was spent
+])
+def test_a_sign_in_saved_during_a_refresh_is_kept(reply):
+    client, http, store = make_client(Response(body=reply))
+    signed_in = Session(token="fresh", refresh_token="fresh-refresh", expire_time=10**14, rexpire_time=10**14)
+
+    async def run():
+        await client.load()
+
+        async def sign_in_meanwhile(*args, **kwargs):
+            await store.save(signed_in)          # a Reconfigure finished while the refresh was out
+            return Response(body=reply)
+        http.post.side_effect = lambda *a, **k: _Later(sign_in_meanwhile)
+        client._renew_from_account = _never_renews
+        await client._ensure_token()
+        saved = await store.load()
+        assert (saved.token, saved.refresh_token) == ("fresh", "fresh-refresh")
+        assert (client._session.token, client._auth_dead) == ("fresh", False)
+    asyncio.run(run())
+
+
+class _Later:
+    """An aiohttp-style response whose body is produced by a coroutine when it is entered."""
+
+    def __init__(self, make):
+        self._make = make
+
+    async def __aenter__(self):
+        self._inner = await self._make()
+        return await self._inner.__aenter__()
+
+    async def __aexit__(self, *args):
+        return False
+
+
+async def _never_renews():
+    return False
+
+
+@pytest.mark.parametrize("sso", [
+    {"success": False, "code": "TEMPORARY", "data": {"token": "bogus", "expireTime": "tomorrow"}},
+    {"success": True, "data": {"token": "partial"}},
+    {"success": True, "data": {"token": "t", "refreshToken": "r", "expireTime": "tomorrow", "rexpireTime": 10**14}},
+])
+def test_an_unusable_vehicle_session_reply_keeps_the_saved_session(sso):
+    client, http, store = make_client(Response(body=None), valid=True)
+
+    async def run():
+        await client.load()
+        client._session.main_token = "main"
+        before = (await store.load()).to_dict()
+
+        async def routed(url, *args, **kwargs):
+            return Response(body={"success": True, "data": "TICKET"} if url.endswith("/iam/sso/login/sec") else sso)
+        client._main_call = lambda path, body, **kw: _json(routed(path))
+        client._iov_call = lambda path, body, **kw: _json(routed(path))
+        with pytest.raises(GacError):
+            await client._establish_iov()
+        assert (await store.load()).to_dict() == before
+        assert client._session.token == "old"
+    asyncio.run(run())
+
+
+async def _json(response):
+    return (await response).body
+
+
+@pytest.mark.parametrize("call", ["status", "command"])
+def test_an_undecryptable_envelope_is_never_taken_as_the_answer(call):
+    from gac_connect.errors import ResponseError
+
+    client, http, _ = make_client(Response(body={"encryptKey": "bad", "encryptData": "bad", "success": True}),
+                                  valid=True)
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError, match="could not be decrypted"):
+            if call == "status":
+                await client.get_status("VIN")
+            else:
+                await client.command("VIN", "horn-on")
+    asyncio.run(run())
+
+
+def test_a_refused_status_read_is_not_a_report_even_with_results():
+    from gac_connect.errors import ResponseError
+
+    client, http, _ = make_client(Response(body={"success": False, "code": "13008", "data": {
+        "results": [{"drivingOverviewAccessors": [{"remainElectricityPercentage": 0.81}]}]}}), valid=True)
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError, match="13008"):
+            await client.get_status("VIN")
+    asyncio.run(run())

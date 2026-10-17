@@ -32,3 +32,15 @@ def test_unknown_alerts_keep_their_codes():
         {"alarmSource": 777, "alarms": [{"alarmObject": 1, "alarmReason": 2}]}]}})
     assert (alert.key, alert.title) == (OTHER, "Car alert 777/1/2")
     assert OTHER in ALERT_KEYS and "living_being_left" in ALERT_KEYS
+
+
+def test_a_page_that_is_not_an_alert_list_is_an_error_not_an_empty_page():
+    import pytest
+
+    from gac_connect.alerts import parse_alerts
+    from gac_connect.errors import ResponseError
+
+    for page in ({"list": 42}, 7, None, "list"):
+        with pytest.raises(ResponseError):
+            parse_alerts(page)
+    assert parse_alerts({"list": None}) == [] and parse_alerts({}) == []

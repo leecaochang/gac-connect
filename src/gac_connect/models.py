@@ -120,18 +120,19 @@ def _decode_door_locks(doors: Any, model: str | None = None) -> bool | None:
         return None
     codes = [_exact_int(door.get("lock")) if isinstance(door, dict) else None for door in doors]
     if 1 in codes:
-        return False
+        return False        # any one door unlocked is enough to say so
+    # Locked needs every door: the four door numbers, each once (every GAC model has four).
+    numbers = [door.get("door") if isinstance(door, dict) else None for door in doors]
+    if len(doors) != 4 or any(type(n) is not int for n in numbers) or set(numbers) != {1, 2, 3, 4}:
+        return None
     if all(code == 0 for code in codes):
         return True
     # Verified UT reports keep rear locks at -1 while the front locks change.
-    # Require all four distinct door IDs and an explicitly selected UT model.
+    # Require an explicitly selected UT model for that pattern.
     model_name = (model or "").strip().casefold()
     if model_name == "aion ut" or model_name.startswith("aion ut "):
-        by_door = {
-            door["door"]: code for door, code in zip(doors, codes, strict=True)
-            if isinstance(door, dict) and type(door.get("door")) is int
-        }
-        if len(doors) == 4 and by_door == {1: 0, 2: 0, 3: -1, 4: -1}:
+        by_door = dict(zip(numbers, codes, strict=True))
+        if by_door == {1: 0, 2: 0, 3: -1, 4: -1}:
             return True
     return None
 

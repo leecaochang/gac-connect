@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { test } = require('node:test');
-// Run from the repository root: node --test tests/
+// Run from the repository root: node --test tests/puzzle_page.test.cjs
 const source = fs.readFileSync('src/gac_connect/puzzle.py', 'utf8');
 const html = source.match(/PAGE = """([\s\S]*?)"""/)[1].replaceAll('__HOST__', 'Home Assistant');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];

@@ -91,6 +91,11 @@ All methods are coroutines unless noted. `vin` is the vehicle's VIN.
 | `list_vehicles()` | Vehicles on the account: `Vehicle` (`vin`, `plate`, `model`, `color`, `default`). |
 | `session` | The current `Session` (property). |
 
+`gac_connect.puzzle` holds the slide-puzzle step for any front end: `page(host)` is the
+browser page, and `PuzzleSession(client, mobile, captcha)` turns each Verify into
+`request_sms` (`submit(x)`, and `state()` for the page), showing a new puzzle after a
+wrong slide. The CLI and the Home Assistant integration both use it.
+
 **Reading**
 
 | Method | Description |
@@ -98,6 +103,9 @@ All methods are coroutines unless noted. `vin` is the vehicle's VIN.
 | `get_status(vin)` | Full status as a `VehicleStatus`. |
 | `get_position(vin)` | Raw position record. |
 | `get_control_capabilities(vin)` | The car's capability list: what it offers remotely, by feature. |
+| `poll_command_result(vin, session_id)` | The car's answer to an accepted command as a `PushResult`, or `None` while it is still running (for use without the push feed). |
+| `get_alarms(vin, *, page=1, page_size=20)` | One page of the car's alert history; `parse_alerts(page)` turns it into `Alert`s. Needs the account session (`AccountSessionEnded` once another phone has signed in). |
+| `get_departure_plans(vin)`, `get_standby_config(vin)` | Departure plans saved in the app (read only). |
 
 **Climate and seats**
 
@@ -123,7 +131,8 @@ All methods are coroutines unless noted. `vin` is the vehicle's VIN.
 
 | Method | Description |
 |---|---|
-| `charge_now(vin, *, until_soc=False)` | Charge whenever plugged in. |
+| `charge_now(vin, *, until_soc=False)` | Charge whenever plugged in (the schedule off). This does not start a new charge once one has ended. |
+| `restart_charging(vin)` | Start a new charge once one has ended (`restart_needed(status)`): a one-time window to the charge limit from the next minute. Send `charge_now` once charging has begun to keep it going. Replaces the saved window. |
 | `set_charge_window(vin, start, stop, *, weekly=0, until_soc=False)` | Charge between `start` and `stop` (`"HH:MM"`). `weekly`: Mon=1 … Sun=64, 127 every day, 0 once. A stop before the start runs overnight. |
 | `resume_schedule(vin, *, until_soc=None)` | Return to the charge window the car last reported. |
 
@@ -154,7 +163,8 @@ in the request; invalid values raise `ValueError` before anything is sent.
 | `battery-precondition`, `battery-precondition-off` | Battery preconditioning. |
 | `vehicle-power-off` | Switch the car off (no overrides). |
 | `powerkeep-stop` | Stop power keep. |
-| `power-on`, `power-off`, `charger-unlock` | Need a PIN; raise `PinRequiredError`. |
+| `charger-unlock` | Unlock the charging connector so it can be pulled out. |
+| `power-on`, `power-off` | Need a PIN; raise `PinRequiredError`. |
 
 Commands return once the service accepts them; the car applies them shortly after.
 Use `command_session_id(response)` to match a response with its push result.
@@ -169,12 +179,17 @@ Use `command_session_id(response)` to match a response with its push result.
 | `power_on`, `power_mode` | Car switched on; raw power mode. |
 | `soc`, `range_km`, `odometer_km` | State of charge (%), range, odometer. |
 | `charging`, `plugged_in`, `charger_locked` | Charging state. |
+| `charge_ended` | The charge has ended (a one-time window finished, or the connector was unlocked); the car will not start another by itself. |
 | `charge_current_a`, `charge_voltage_v`, `charge_power_kw`, `estimated_charge_minutes` | Charging figures. |
 | `charging_mode` | `ChargingMode.FREE`, `SCHEDULED` (once), `LOOP` (repeating) or `UNKNOWN`. |
 | `charge_window_start`, `charge_window_stop`, `charge_weekly`, `charge_end_type` | Reported charge window. |
-| `cabin_temp_c`, `outside_temp_c`, `pm25`, `aux_voltage` | Cabin and outside temperature, cabin PM2.5, 12 V battery. |
+| `cabin_temp_c`, `outside_temp_c`, `pm25`, `aux_voltage`, `battery_temp_c` | Cabin and outside temperature, cabin PM2.5, 12 V battery, battery temperature. |
+| `trip_consumption_kwh_100km` | Average consumption of the drive under way, else the last one (the car's Trip figure). |
 | `latitude`, `longitude` | Position. |
-| `locked`, `door_open`, `window_open`, `hatch_open`, `sunroof_open` | Body state. |
+| `locked`, `door_open`, `window_open`, `hatch_open`, `hood_open`, `sunroof_open` | Body state. `locked` needs all four doors reported locked. |
+| `front_left_door_open` … `rear_right_window_open` | Each door and window by position. |
+| `headlights_on`, `high_beam_on`, `rear_fog_on`, `turn_signal_on`, `brake_lights_on` | Lights (the turn signal includes the hazard lights). |
+| `brake_fluid_low`, `sterilisation_on` | Brake-fluid alarm; cabin sterilisation running. |
 | `ac_on`, `ac_target_temp_c`, `ac_fan_strength`, `ac_auto_on`, `ac_compressor_on`, `ac_blowing_mode`, `ac_cycling_mode` | Climate. |
 | `seats` | `Seat` list: `position` (1–4), `ventilation_on`, `ventilation_strength`, `heating_strength`. |
 | `tyres` | `Tyre` list: `position` (1–4), `pressure_kpa`, `temperature_c`. |
@@ -203,7 +218,8 @@ await task
 ```
 
 `PushResult` fields: `ok` (`True` applied, `False` refused, `None` unknown), `code`,
-`reason`, `message`, `event`, `session_id`, `vin`, `data`. Some regions' brokers
+`reason`, `message`, `event`, `session_id`, `vin`, `data`, and `details` (what the car
+reported as the cause of a refusal, such as `"Driver door ajar"`). Some regions' brokers
 are unencrypted; pass `allow_plaintext=True` to connect to them.
 
 ### Errors
@@ -213,12 +229,13 @@ All derive from `GacError`.
 | Error | Raised when |
 |---|---|
 | `AuthExpiredError` | The session has ended and cannot be renewed; sign in again. |
+| `AccountSessionEnded` | GAC's account session has ended (the app signed in elsewhere); only account features such as the alert list need it. |
 | `CaptchaError`, `LoginError` | Sign-in failed. |
 | `CommandError` | The service refused a command; `code` and `reason` say why. |
 | `PinRequiredError` | The command needs a PIN. |
 | `RateLimitedError` | A request limit was reached; `retry_after` in seconds. Nothing was sent. |
 | `RegionError` | Unknown region. |
-| `ResponseError` | Network failure or unexpected response. |
+| `ResponseError` | Network failure, or a reply that was refused, could not be decrypted or was not as expected. |
 
 ### Helpers
 
@@ -228,6 +245,7 @@ All derive from `GacError`.
 | `validate_weekly(value)` | Check a day bitmask (0–127). |
 | `window_operation(start, stop, tz, *, weekly=0, until_soc=False)` | The charge-window request body. |
 | `local_mobile(value, country_tel)` | A mobile number in national format. |
+| `restart_needed(status)` | Whether a plugged-in car's charge has ended and needs `restart_charging`. |
 | `equipment_from_capabilities(data)` | Equipment flags from a `get_control_capabilities` response. |
 | `ranges_from_capabilities(data)` | Remote choices and spans from a `get_control_capabilities` response: A/C temperature, run time, fan speeds, outlet and air-source codes, seat ventilation levels, battery preconditioning, fridge modes and temperatures. |
 | `Capabilities`, `Support` | Equipment detection from the capability list and status reports. |
@@ -274,6 +292,15 @@ EV brands into Home Assistant and Python, among them:
 Thanks to their authors for showing what a good community integration looks like.
 
 ## Changes
+
+- **0.5.0** — `gac_connect.puzzle`, the sign-in puzzle page and session shared by the CLI
+  and Home Assistant. Charging: one-time windows in the app's format (an open window
+  starts at the next minute), `restart_charging` and `restart_needed`, more charging
+  status codes. New readings: each door and window, lights, hood, brake fluid, battery
+  temperature, trip consumption, sterilisation. Alert list, departure plan and command
+  result reads. Fixes: a refresh no longer overwrites a sign-in saved meanwhile; a
+  partial vehicle-session reply is rejected; an undecryptable reply or a refused status
+  read is an error; `locked` needs all four doors; a malformed alert page is an error.
 
 - **0.4.0b5** — UK (`GB`) IoV crypto is now entirely its own, not GAC
   International's. The shared IoV gateway validates the signature per app id, and
