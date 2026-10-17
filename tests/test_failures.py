@@ -808,3 +808,12 @@ def test_the_memory_store_keeps_its_own_copy_so_renewal_rotates_the_account_toke
         saved.token = "changed by a caller"
         assert (await store.load()).token == "renewed"
     asyncio.run(run())
+
+
+
+def test_a_refused_seat_level_says_the_car_must_be_ready_with_someone_inside():
+    from gac_connect.commands import refusal_hint
+
+    hint = refusal_hint("13005", "seat-1-ventilation-on")
+    assert "switched off" in hint and "press the brake" in hint and "switched on but not ready" in hint
+    assert "press the brake" not in refusal_hint("13005", "lock")

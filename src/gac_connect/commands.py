@@ -145,6 +145,13 @@ _CONDITIONS: dict[str, tuple[str, ...]] = {
     "engine/stop": (_STILL, _NOT_DRIVER_ON),
     "power/off": (_STILL, _NOT_DRIVER_ON),
 }
+# What a car was seen to accept beyond the app's list (Aion UT, 2026-10-17: seat levels were
+# refused twice while the car was switched on but not ready, then accepted once the brake
+# was pressed; the refusal carried "Anti-theft warning status", a status field, not the cause).
+_SEEN: dict[str, str] = {
+    "control_seat_temperature": ("With someone inside, it also works with the car ready to drive "
+                                 "(press the brake); switched on but not ready, it is refused"),
+}
 
 
 def refusal_hint(code: object, command: str) -> str | None:
@@ -154,7 +161,10 @@ def refusal_hint(code: object, command: str) -> str | None:
     cmd = CATALOG.get(command)
     path = (cmd.path if cmd else command).rsplit("/access_gateway/", 1)[-1]
     conditions = _CONDITIONS.get(path)
-    return f"The GAC app lists these conditions: {'; '.join(conditions)}." if conditions else None
+    if not conditions:
+        return None
+    hint = f"The GAC app lists these conditions: {'; '.join(conditions)}."
+    return f"{hint} {_SEEN[path]}." if path in _SEEN else hint
 
 
 CLIMATE_TEMP_RANGE = (18.0, 32.0)   # °C
