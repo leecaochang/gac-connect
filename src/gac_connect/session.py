@@ -58,6 +58,21 @@ class TokenStore(Protocol):
     async def save(self, session: Session) -> None: ...
 
 
+def credential_pair(session: Session) -> tuple[str | None, str | None]:
+    """What identifies a saved session: its vehicle-session token pair."""
+    return session.token, session.refresh_token
+
+
+class ConditionalStore(TokenStore, Protocol):
+    async def replace(self, expected: tuple[str | None, str | None], session: Session) -> Session | None:
+        """Save ``session`` only if the stored pair is still ``expected``, as one step.
+
+        Returns None once saved, or the stored session, unchanged, if something else (a new
+        sign-in) replaced the expected one. An unreadable stored session counts as expected:
+        the session being saved is then the only usable one.
+        """
+
+
 class MemoryStore:
     """A store that keeps the session only in memory (default)."""
 
@@ -70,12 +85,19 @@ class MemoryStore:
     async def save(self, session: Session) -> None:
         self._session = session
 
+    async def replace(self, expected: tuple[str | None, str | None], session: Session) -> Session | None:
+        if credential_pair(self._session) != expected:
+            return self._session
+        self._session = session
+        return None
+
 
 class FileStore:
     """A store backed by a JSON file (used by the CLI). Written 0600."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path).expanduser()
+        self._lock = asyncio.Lock()
 
     async def load(self) -> Session:
         return await asyncio.to_thread(self._load)
@@ -87,13 +109,22 @@ class FileStore:
             return Session()
 
     async def save(self, session: Session) -> None:
-        task = asyncio.create_task(asyncio.to_thread(self._save, session.to_dict()))
+        async with self._lock:
+            await _finish(asyncio.to_thread(self._save, session.to_dict()))
+
+    async def replace(self, expected: tuple[str | None, str | None], session: Session) -> Session | None:
+        async with self._lock:
+            return await _finish(asyncio.to_thread(self._replace, expected, session))
+
+    def _replace(self, expected: tuple[str | None, str | None], session: Session) -> Session | None:
         try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            # Do not release a caller's refresh gate while its disk write still runs.
-            await task
-            raise
+            current = self._load()
+        except (OSError, ValueError):
+            current = None              # unreadable: the session being saved is the usable one
+        if current is not None and credential_pair(current) != expected:
+            return current
+        self._save(session.to_dict())
+        return None
 
     def _save(self, data: dict) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -113,3 +144,14 @@ class FileStore:
                     os.close(directory)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+async def _finish(work):
+    """Await a disk operation to its end, even when the caller is cancelled meanwhile."""
+    task = asyncio.ensure_future(work)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Do not release a caller's refresh gate while its disk write still runs.
+        await task
+        raise

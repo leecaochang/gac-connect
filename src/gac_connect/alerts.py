@@ -7,6 +7,7 @@ English wording. A record can list several alerts; like the app, the last one is
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -94,8 +95,8 @@ def _int(value: Any) -> int | None:
         return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value)
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]{1,9}", value.strip()):
+        return int(value)        # plain ASCII digits only ("--1" or "²" are not numbers here)
     return None
 
 

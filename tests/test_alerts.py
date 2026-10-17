@@ -44,3 +44,19 @@ def test_a_page_that_is_not_an_alert_list_is_an_error_not_an_empty_page():
         with pytest.raises(ResponseError):
             parse_alerts(page)
     assert parse_alerts({"list": None}) == [] and parse_alerts({}) == []
+
+
+
+def test_malformed_alert_codes_read_as_unknown_not_a_crash():
+    import json
+
+    from gac_connect.alerts import parse_alerts
+
+    for code in ("--1", "\u00b2", "1e5", " 12 ", "99999999999"):
+        content = {"alarmStatus": [{"alarmSource": code, "alarms": [{"alarmObject": code, "alarmReason": code,
+                                                                      "signals": [{"signalCode": code}]}]}]}
+        alerts = parse_alerts({"list": [{"alarmId": "a", "alarmContent": json.dumps(content)}]})
+        assert len(alerts) == 1
+    assert parse_alerts({"list": [{"alarmId": "b", "alarmContent": json.dumps(
+        {"alarmStatus": [{"alarmSource": " 210 ", "alarms": [{"alarmObject": "0", "alarmReason": "6"}]}]})}]}
+                        )[0].key == "charging_finished"

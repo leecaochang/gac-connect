@@ -901,11 +901,11 @@ def test_rotated_tokens_are_saved_before_use_and_shared_through_the_store():
     expired = Session(token="t", refresh_token="r", expire_time=1, rexpire_time=later)
     store = MemoryStore(expired)
     seen = []
-    orig = store.save
-    async def save(sess):
+    orig = store.replace            # every client write is a compare-and-save
+    async def replace(expected, sess):
         seen.append((sess.token, a._session.token, b._session.token))
-        await orig(sess)
-    store.save = save
+        return await orig(expected, sess)
+    store.replace = replace
     from gac_connect.client import GacClient
     a, b = GacClient("AU", http, store, limiter=_limiter()), GacClient("AU", http, store, limiter=_limiter())
     async def go():

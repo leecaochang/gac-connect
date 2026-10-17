@@ -570,3 +570,117 @@ def test_a_refused_status_read_is_not_a_report_even_with_results():
         with pytest.raises(ResponseError, match="13008"):
             await client.get_status("VIN")
     asyncio.run(run())
+
+
+class _GatedStore(MemoryStore):
+    """A store whose compare-and-save waits at a gate, so a test can act in between."""
+
+    def __init__(self, session):
+        super().__init__(session)
+        self.entered, self.gate = asyncio.Event(), asyncio.Event()
+
+    async def replace(self, expected, session):
+        self.entered.set()
+        await self.gate.wait()
+        return await super().replace(expected, session)
+
+
+ROTATED = {"data": {"token": "rotated", "refreshToken": "next", "expireTime": 10**14, "rexpireTime": 10**14}}
+
+
+def test_a_refresh_cancelled_while_saving_still_keeps_the_rotated_pair():
+    http = Mock()
+    http.post.return_value = Response(body=ROTATED)
+    store = _GatedStore(Session(token="old", refresh_token="refresh", expire_time=1, rexpire_time=10**14))
+    client = GacClient("AU", http, store)
+
+    async def run():
+        await client.load()
+        task = asyncio.create_task(client._ensure_token())
+        await store.entered.wait()
+        task.cancel()                       # e.g. the entry is unloading
+        await asyncio.sleep(0)
+        store.gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert ((await store.load()).token, client._session.token) == ("rotated", "rotated")
+    asyncio.run(run())
+
+
+def test_an_unreadable_saved_session_does_not_lose_a_rotated_pair(tmp_path):
+    from gac_connect.session import FileStore
+
+    path = tmp_path / "session.json"
+    store = FileStore(path)
+    http = Mock()
+
+    def rotate_and_corrupt(*args, **kwargs):
+        path.write_text("{corrupt")         # unreadable by the time the rotation is saved
+        return Response(body=ROTATED)
+    http.post.side_effect = rotate_and_corrupt
+    client = GacClient("AU", http, store)
+
+    async def run():
+        await store.save(Session(token="old", refresh_token="refresh", expire_time=1, rexpire_time=10**14))
+        await client.load()
+        await client._ensure_token()
+        assert (await store.load()).token == "rotated"
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("writer", ["renewal", "account refresh"])
+def test_background_writers_never_overwrite_a_newer_sign_in(writer):
+    signed_in = Session(token="fresh", refresh_token="fresh-refresh", expire_time=10**14, rexpire_time=10**14)
+    store = MemoryStore(Session(token="old", refresh_token="refresh", expire_time=10**14, rexpire_time=10**14,
+                                main_token="main", main_refresh_token="main-refresh"))
+    client = GacClient("AU", Mock(), store)
+
+    async def run():
+        await client.load()
+        await store.save(signed_in)         # a Reconfigure finished meanwhile
+        if writer == "renewal":
+            client._main_call = _answers({"success": True, "data": "TICKET"})
+            client._iov_call = _answers({"success": True, "data": {"token": "renewed", "refreshToken": "r",
+                                                                   "expireTime": 10**14, "rexpireTime": 10**14}})
+            await client._establish_iov()
+        else:
+            client._main_call = _answers({"success": True, "data": {"token": "main2", "refreshToken": "mr2"}})
+            assert await client._refresh_account_token()
+        saved = await store.load()
+        assert (saved.token, client._session.token) == ("fresh", "fresh")
+    asyncio.run(run())
+
+
+def _answers(reply):
+    async def call(*args, **kwargs):
+        return reply
+    return call
+
+
+
+@pytest.mark.parametrize("ciphertext", ["", None, False, 0, [], "bad"])
+def test_an_envelope_that_cannot_be_decrypted_is_an_error_whatever_it_holds(ciphertext):
+    from gac_connect.errors import ResponseError
+
+    client, http, _ = make_client(Response(body={"encryptKey": "bad", "encryptData": ciphertext, "success": True}),
+                                  valid=True)
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError, match="could not be decrypted"):
+            await client.lock("VIN")
+    asyncio.run(run())
+
+
+def test_a_refused_refresh_never_replaces_the_credentials_even_with_tokens_in_it():
+    from gac_connect.errors import ResponseError
+
+    client, http, store = make_client(Response(body={"success": False, "code": "13008", "data": {
+        "token": "t", "refreshToken": "r", "expireTime": 10**14, "rexpireTime": 10**14}}))
+
+    async def run():
+        await client.load()
+        with pytest.raises(ResponseError, match="refused"):
+            await client._ensure_token()
+        assert ((await store.load()).token, client._auth_dead) == ("old", False)
+    asyncio.run(run())
