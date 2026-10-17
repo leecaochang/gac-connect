@@ -56,6 +56,19 @@ def test_transport_requires_tls_or_explicit_consent(host, allow, connect):
             client._pump.assert_awaited_once()
         assert client.connected is False
         assert (client.broker.topics if client.broker else None) == (("result",) if connect else None)
+        assert client.refused_plaintext is (not connect)
+    asyncio.run(run())
+
+
+def test_a_refused_plaintext_broker_is_not_asked_again():
+    async def run():
+        client = PushClient(AsyncMock(), Mock(), allow_plaintext=False)
+        client._fetch_info = AsyncMock(return_value={"host": "tcp://broker.invalid", "topics": ["result"]})
+        with patch("gac_connect.push.aiomqtt.Client") as factory:
+            await asyncio.wait_for(client.run(), timeout=1)     # returns at once: no retry loop
+        client._fetch_info.assert_awaited_once()
+        factory.assert_not_called()
+        assert client.refused_plaintext is True
     asyncio.run(run())
 
 

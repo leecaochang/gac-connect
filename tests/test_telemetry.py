@@ -322,16 +322,18 @@ def test_battery_temperature_follows_the_battery_report():
     assert (status.battery_temp_c, status.aux_voltage) == (30.5, 12.8)
 
 
-@pytest.mark.parametrize("mode,on", [(1, True), (0, False), (-1, None), (None, None)])
+@pytest.mark.parametrize("mode,on", [(1, True), (0, False), (3, False), (4, False), (2, None), (-1, None),
+                                     (None, None)])
 def test_sterilisation_follows_the_antivirus_mode(mode, on):
-    # Aion UT, app-started sterilisation: mode 1 with the A/C running hot; 0 once stopped.
+    # Aion UT, app-started sterilisation: mode 1 with the A/C running hot; 0 once stopped;
+    # 3 after a 30-minute run from HA had finished (2026-10-17).
     air = {"airConditionAntivirusMode": mode} if mode is not None else {}
     assert VehicleStatus.from_results({"airConditionAccessors": [air]}).sterilisation_on is on
 
 
 
-@pytest.mark.parametrize("code,charging", [(0, False), (1, False), (2, True), (4, False), (23, False), (27, False),
-                                           (5, None)])
+@pytest.mark.parametrize("code,charging", [(0, False), (1, False), (2, True), (4, False), (7, False), (23, False),
+                                           (27, False), (5, None)])
 def test_charging_status_codes(code, charging):
     # Aion UT 2026-10-16: 1 plugged in with the charger switched off, 2 charging at 31 A / 225 V,
     # 27 waiting for a scheduled start.

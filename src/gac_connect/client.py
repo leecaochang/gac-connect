@@ -798,8 +798,19 @@ class GacClient:
         return await self.command(vin, "unlock")
 
     async def charge_now(self, vin: str, *, until_soc: bool = False) -> Any:
-        """Allow charging whenever plugged in; the car keeps its saved window for a later resume."""
+        """Allow charging whenever plugged in; the car keeps its saved window for a later resume.
+
+        This does not start a new charge once one has ended (``models.restart_needed``); use
+        ``restart_charging`` first, then this once charging has begun.
+        """
         return await self._reservation(vin, vehicle.charge_now_operation(until_soc=until_soc))
+
+    async def restart_charging(self, vin: str) -> Any:
+        """Start a new charge once one has ended: one time to the charge limit from the next minute.
+
+        This replaces the saved window, so it is not meant for a repeating schedule.
+        """
+        return await self._reservation(vin, vehicle.restart_operation(self._zone()))
 
     async def resume_schedule(self, vin: str, *, until_soc: bool | None = None) -> Any:
         """Return to scheduled charging with the window the car last reported.

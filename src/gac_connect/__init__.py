@@ -21,7 +21,7 @@ from .errors import (
     ResponseError,
 )
 from .limits import DEFAULT_LIMITER, Limiter
-from .models import VehicleStatus, doors_locked
+from .models import VehicleStatus, doors_locked, restart_needed
 from .phone import local_mobile
 from .push import BrokerInfo, PushClient, PushResult, interpret
 from .vehicle import validate_clock, validate_weekly, window_operation
@@ -41,6 +41,7 @@ __all__ = [
     "VehicleStatus",
     "decode_status",
     "doors_locked",
+    "restart_needed",
     "local_mobile",
     "validate_clock",
     "validate_weekly",

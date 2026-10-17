@@ -67,7 +67,13 @@ def test_resume_resends_the_reported_window_and_stopping_rule_in_scheduled_mode(
         await client.resume_schedule("VIN")
 
     asyncio.run(run())
-    op = _sent(client)   # repeat (loop) is resumed with times of day, dated for the next occurrence
+    op = _sent(client)
+    if report["weeklyReservation"] == 0:     # one time: the app's once, dated start and stop
+        assert (op["chargingMode"], op["chargingEndType"]) == (1, 0) and "weeklyReservation" not in op
+        assert (op["stopTime"]["hour"], op["stopTime"]["minute"]) == (5, 0)
+        assert _when(op["stopTime"]) > _when(op["startTime"])
+        return
+    # repeat (loop) is resumed with times of day, dated for the next occurrence
     assert op["chargingMode"] == 2 and op["chargingEndType"] == report["chargingEndType"]
     assert op["dailyReservationStartTime"] == 23 * 3600000
     assert op["weeklyReservation"] == report["weeklyReservation"]
@@ -127,6 +133,18 @@ def test_the_not_set_placeholder_is_no_window():
     midnight = {**placeholder, "dailyReservationStopTime": 3_600_000}     # a real 00:00–01:00 window stays
     assert vehicle.reported_window(midnight) is not None
     assert VehicleStatus.from_results({"chargingAccessors": [midnight]}).charge_window_stop == "01:00"
+
+def test_a_window_kept_in_undated_fields_is_not_the_placeholder():
+    # Aion UT 2026-10-17: a one-time 12:00-13:00 window set while charging, reported with times 0.
+    report = {"chargingMode": 1, "dailyReservationStartTime": 0, "dailyReservationStopTime": 0,
+              "weeklyReservation": 0, "chargingEndType": 0, "chargingStatus": 27,
+              "startTime": {"year": 2000, "month": 0, "day": 0, "hour": 12, "minute": 0, "second": 0},
+              "stopTime": {"year": 2000, "month": 0, "day": 0, "hour": 13, "minute": 0, "second": 0}}
+    status = VehicleStatus.from_results({"chargingAccessors": [report]})
+    assert (status.charge_window_start, status.charge_window_stop) == ("12:00", "13:00")
+    window = vehicle.reported_window(report)
+    assert (window["dailyReservationStartTime"], window["dailyReservationStopTime"]) == (43_200_000, 46_800_000)
+
 
 def test_reported_window_drops_malformed_parts():
     window = vehicle.reported_window({
@@ -218,10 +236,10 @@ def test_resuming_an_app_once_window_rebuilds_it_for_the_next_occurrence():
         await client.resume_schedule("VIN")
 
     asyncio.run(run())
-    op = _sent(client)   # a reported once window (mode 1, Unix-ms) is resent as loop without days
-    assert (op["chargingMode"], op["weeklyReservation"]) == (2, 0)
-    assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (79560000, 79920000)
-    assert (op["startTime"]["hour"], op["startTime"]["minute"]) == (22, 6)
+    op = _sent(client)   # a reported once window is resent as the app's once, dated for the next 22:06
+    assert (op["chargingMode"], op["chargingEndType"]) == (1, 0) and "weeklyReservation" not in op
+    assert (op["stopTime"]["hour"], op["stopTime"]["minute"]) == (22, 12)
+    assert _when(op["stopTime"]) > _when(op["startTime"])
 
 
 # An app-made repeating window across midnight on an Aion UT (23:09–00:10, Fri and Sat).
@@ -248,3 +266,65 @@ def test_a_window_across_midnight_reads_and_resumes_as_the_app_set_it():
     op = _sent(client)
     assert (op["dailyReservationStartTime"], op["dailyReservationStopTime"]) == (83340000, 87000000)
     assert op["weeklyReservation"] == 48 and _when(op["stopTime"]) > _when(op["startTime"])
+
+
+def test_an_ended_charge_restarts_with_a_one_time_window_from_the_next_minute():
+    """Aion UT, 2026-10-17: with status 4 (a window ended) or 23 (the connector unlocked) the
+    schedule off did not charge again; a one-time window from the next minute did."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("Asia/Bangkok")
+    operation = vehicle.restart_operation(zone, datetime(2026, 10, 17, 11, 18, 50, tzinfo=zone))
+    assert operation == {"chargingMode": 1, "chargingEndType": 1,
+                         "startTime": {"year": 2026, "month": 10, "day": 17, "hour": 11, "minute": 20,
+                                       "second": 0, "millisecond": 0}}
+    assert vehicle.restart_operation(zone, datetime(2026, 10, 17, 23, 59, 10, tzinfo=zone))["startTime"][
+        "day"] == 18
+    client, _ = _client()
+
+    async def run():
+        await client.load()
+        client._iov_call = AsyncMock(return_value=ACCEPTED)
+        await client.restart_charging("VIN")
+
+    asyncio.run(run())
+    sent = _sent(client)
+    assert (sent["chargingMode"], sent["chargingEndType"], set(sent)) == (1, 1, {"chargingMode", "chargingEndType",
+                                                                                 "startTime"})
+
+
+PLACEHOLDER = {"dailyReservationStartTime": 0, "dailyReservationStopTime": 0,
+               "startTime": {"year": 2000, "month": 0, "day": 0, "hour": 0, "minute": 0},
+               "stopTime": {"year": 2000, "month": 0, "day": 0, "hour": 0, "minute": 1}}
+ONCE = {"dailyReservationStartTime": 1792207200000, "dailyReservationStopTime": 1792207320000}
+
+
+@pytest.mark.parametrize("charging,plug,needed", [
+    ({"chargingStatus": 4, "chargingMode": 0, **ONCE}, 1, True),     # schedule off after the window ended
+    ({"chargingStatus": 4, "chargingMode": 1, **ONCE}, 1, True),
+    ({"chargingStatus": 27, "chargingMode": 1, **PLACEHOLDER}, 1, True),   # the app's "not set"
+    ({"chargingStatus": 27, "chargingMode": 1, **ONCE}, 1, False),   # waiting for a window ahead
+    ({"chargingStatus": 4, "chargingMode": 2, **ONCE}, 1, False),    # a repeating schedule is kept
+    ({"chargingStatus": 4, "chargingMode": 0, **ONCE}, 0, False),    # unplugged
+    ({"chargingStatus": 2, "chargingMode": 0, **ONCE}, 1, False),
+    ({"chargingStatus": 1, "chargingMode": 0, **ONCE}, 1, False),    # the charger's supply is off
+    ({"chargingStatus": 7, "chargingMode": 0, **ONCE}, 1, False),
+    ({"chargingStatus": 23, "chargingMode": 0, **ONCE}, 1, True),    # the connector unlocked, cable in
+    ({"chargingStatus": 0, "chargingMode": 0, **ONCE}, 1, True),
+])
+def test_restart_is_needed_only_for_an_ended_charge_while_plugged_in(charging, plug, needed):
+    from gac_connect import decode_status, restart_needed
+
+    status = decode_status({"chargingAccessors": [charging], "chargerAccessors": [{"plug": plug, "lock": 0}]})
+    assert restart_needed(status) is needed
+    assert restart_needed(None) is False
+
+
+def test_a_one_time_window_closing_before_the_next_minute_is_refused():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("Asia/Bangkok")
+    with pytest.raises(vehicle.WindowClosingError, match="later stop time"):
+        vehicle.window_operation("10:00", "11:11", zone, now=datetime(2026, 10, 17, 11, 10, 40, tzinfo=zone))

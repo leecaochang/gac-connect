@@ -4,17 +4,21 @@ The gateway has no plain "start" / "stop"; charging is gated through the schedul
 
 * **charge now** — ``{"chargingMode": 0}`` alone (free: charge whenever plugged
   in). The car keeps its saved window. The command returns immediately; the car
-  applies it asynchronously and resuming can take several minutes.
+  applies it asynchronously and resuming can take several minutes. It does not
+  start a new charge once one has ended (``models.restart_needed``: a window finished,
+  or the connector was unlocked): a one-time window to the charge limit starting at
+  the next minute does (``restart_operation``), and charge now sent once charging has
+  begun keeps it going past that window (Aion UT, 2026-10-17).
 * **resume schedule** — the last reported window, scheduled again. This is also
   the only pause: the app has none, and with a schedule on the car blocks AC
   charging outside the window (DC fast charging starts regardless). A one-time
   window far ahead is acknowledged but not kept, so there is no open-ended pause.
-* **set window** — loop mode (2) with times of day and calendar fields dated for
-  the (selected) occurrence open now, else the next one, so a one-time window already
-  open starts at once. Selected days repeat; no days (``weekly`` 0) is a one-time
-  window, which the car records as the app's "once" (mode 1). 127 is every day.
-  With no window, the car reports once mode with both times 0 (the app's "Charging
-  time is not set").
+* **set window** — selected days repeat in loop mode (2), with times of day and
+  calendar fields dated for the next occurrence; 127 is every day. No days (``weekly``
+  0) is a one-time window, sent as the app's "once": mode 1 with dated calendar fields
+  only. The car never starts a one-time window whose start has passed, so one already
+  open is sent starting in a minute. After a one-time window the car reports once mode
+  with both times 0 (the app's "Charging time is not set") and waits.
 
 Times are car-local. ``weekly`` is a day bitmask (Mon=1, Tue=2, … Sun=64).
 
@@ -27,7 +31,10 @@ encoding the calendar clock in UTC+8) is resent as loop without days. Stopping a
 the car's charge limit (``chargingEndType`` 1) sends no stop time, as the app does;
 with one the request is refused with 13101. The car keeps its saved stop time. One
 time to the charge limit is sent as the app's once: mode 1 with a dated start alone
-(verified 2026-10-16: the car waited and started on time). A window that crosses midnight sends its stop as the time of
+(verified 2026-10-16: the car waited and started on time); one time to a stop time is
+mode 1 with a dated start and stop (verified 2026-10-17: started and stopped on time).
+Loop mode without days was accepted for one time, but the car then kept only undated
+hours and did not start it. A window that crosses midnight sends its stop as the time of
 day plus 24 hours (00:10 as 24:10), as the app does and as the car reports it; a stop
 earlier than the start is refused with 13002.
 """
@@ -38,6 +45,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .const import IOV_PREFIX, SERVICE_CLOCK
+from .models import undated_window
 
 _RESERVATION = f"{IOV_PREFIX}/charging/reservation"
 MODE_FREE = 0
@@ -48,6 +56,10 @@ END_AT_SOC = 1
 
 
 _DAY_MS = 86_400_000
+
+
+class WindowClosingError(ValueError):
+    """A one-time window that ends before the car could start it."""
 
 
 def _ms_of_day(hh: int, mm: int) -> int:
@@ -151,10 +163,25 @@ def reported_window(charging: object) -> dict | None:
         if parts and _dated(parts):
             window[key] = {name: part if part is not None else 0 for name, part in parts.items()}
     if start == stop == 0 and "startTime" not in window and "stopTime" not in window:
-        return None     # the car's "Charging time is not set": no window to resume
+        if (undated := undated_window(charging)) is None:
+            return None     # the car's "Charging time is not set": no window to resume
+        (sh, sm), (eh, em) = undated     # kept only in the undated calendar fields
+        window["dailyReservationStartTime"] = _ms_of_day(sh, sm)
+        window["dailyReservationStopTime"] = _ms_of_day(eh, em) + (_DAY_MS if (eh, em) <= (sh, sm) else 0)
     if mode in (MODE_SCHEDULED, MODE_LOOP):
         window["chargingMode"] = mode      # the scheduled mode to resume later
     return window
+
+
+def _next_minute(tz: ZoneInfo, now: datetime | None) -> datetime:
+    """The next whole minute at least 30 s ahead: the car never starts a start already past."""
+    current = datetime.now(tz) if now is None else now.astimezone(tz)
+    return (current + timedelta(seconds=90)).replace(second=0, microsecond=0)
+
+
+def restart_operation(tz: ZoneInfo, now: datetime | None = None) -> dict:
+    """Start a new charge once one has ended: one time to the charge limit from the next minute."""
+    return {"chargingMode": MODE_SCHEDULED, "chargingEndType": END_AT_SOC, "startTime": _struct(_next_minute(tz, now))}
 
 
 def _build(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int, end_type: int,
@@ -171,6 +198,17 @@ def _build(sh: int, sm: int, eh: int, em: int, tz: ZoneInfo, weekly: int, end_ty
         # started on time; with a stop it refuses 13101.
         start, _ = _next_window(sh, sm, eh, em, tz, 0, now, open_now=False)
         return {"chargingMode": MODE_SCHEDULED, "chargingEndType": END_AT_SOC, "startTime": _struct(start)}
+    if not weekly:
+        # One time to a stop time: the app's once, dated start and stop (Aion UT, 2026-10-17:
+        # started and stopped on time). A start already past is never started, so a window
+        # open now starts at the next minute (at least 30 s ahead).
+        start, stop = _next_window(sh, sm, eh, em, tz, 0, now, open_now=True)
+        start = max(start, _next_minute(tz, now))
+        if start >= stop:
+            raise WindowClosingError("the window ends before the car could start it (a start already past "
+                                     "is sent from the next minute); choose a later stop time")
+        return {"chargingMode": MODE_SCHEDULED, "chargingEndType": END_AT_TIME,
+                "startTime": _struct(start), "stopTime": _struct(stop)}
     start, stop = _next_window(sh, sm, eh, em, tz, weekly, now, open_now=open_now)
     stop_ms = _ms_of_day(eh, em) + (_DAY_MS if (eh, em) <= (sh, sm) else 0)
     return _operation(_ms_of_day(sh, sm), stop_ms, weekly, MODE_LOOP, end_type,

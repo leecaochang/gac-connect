@@ -145,6 +145,26 @@ def doors_locked(status: VehicleStatus | None, model: str | None = None) -> bool
     return None if status is None else _decode_door_locks(status.raw.get("doorAccessors"), model)
 
 
+def restart_needed(status: VehicleStatus | None) -> bool:
+    """Whether the car, plugged in, has ended its charge and will not start another by itself.
+
+    Switching the schedule off does not start a new charge; plugging in, the supply coming on
+    or a window's start does. An Aion UT (2026-10-17) reported chargingStatus 4 after a
+    one-time window ended, then once mode with no window (the app's "Charging time is not
+    set"), and 0 then 23 after the connector was unlocked with the cable left in: with the
+    schedule off it did not charge again, and a one-time window starting in a minute
+    (``restart_operation``) charged in both cases. A repeating schedule is never counted, as a
+    restart would replace it, nor the supply being off (1, 7).
+    """
+    if status is None or status.plugged_in is not True or status.charging is True:
+        return False
+    if status.charging_mode not in (ChargingMode.FREE, ChargingMode.SCHEDULED):
+        return False
+    not_set = (status.charging_mode is ChargingMode.SCHEDULED and status.charge_window_start is None
+               and status.charge_window_stop is None)
+    return status.charge_ended is True or not_set
+
+
 def _enabled(item: dict, flag: str) -> bool:
     value = item.get(flag, True)
     return value if isinstance(value, bool) else _exact_int(value) == 1
@@ -198,11 +218,37 @@ def _timestamp_clock(value: Any) -> str | None:
         return None
 
 
+def _struct_clock(value: Any) -> tuple[int, int] | None:
+    """Hour and minute of a calendar field, dated or not."""
+    if not isinstance(value, dict):
+        return None
+    hour, minute = _exact_int(value.get("hour")), _exact_int(value.get("minute"))
+    return (hour, minute) if hour is not None and minute is not None and 0 <= hour < 24 and 0 <= minute < 60 else None
+
+
+def undated_window(chg: dict) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """A window kept only in undated calendar fields, with both daily times 0.
+
+    An Aion UT reported a one-time 12:00-13:00 window set while it was charging this way
+    (2026-10-17): times 0, startTime/stopTime year 2000, month and day 0, hours 12 and 13.
+    The "not set" placeholder looks the same but reads 00:00 and 00:01.
+    """
+    if not all(_exact_int(chg.get(key)) == 0 for key in ("dailyReservationStartTime", "dailyReservationStopTime")):
+        return None
+    if any(_calendar_clock(chg.get(key)) for key in ("startTime", "stopTime")):
+        return None
+    start, stop = (_struct_clock(chg.get(key)) for key in ("startTime", "stopTime"))
+    if start is None or stop is None or all(hour == 0 and minute <= 1 for hour, minute in (start, stop)):
+        return None
+    return start, stop
+
+
 def _window_not_set(chg: dict) -> bool:
     """The car's placeholder for no window (the app's "Charging time is not set"):
-    both times 0 and neither calendar field a real date."""
+    both times 0, neither calendar field a real date, and no window in the undated fields."""
     return (all(_exact_int(chg.get(key)) == 0 for key in ("dailyReservationStartTime", "dailyReservationStopTime"))
-            and not any(_calendar_clock(chg.get(key)) for key in ("startTime", "stopTime")))
+            and not any(_calendar_clock(chg.get(key)) for key in ("startTime", "stopTime"))
+            and undated_window(chg) is None)
 
 
 def _reservation_format(chg: dict) -> str | None:
@@ -244,6 +290,9 @@ class VehicleStatus:
     soc: float | None = None                 # %
     range_km: float | None = None
     charging: bool | None = None
+    # the charge has ended (a window finished, the connector was unlocked) and the car will
+    # not start another by itself (see restart_needed)
+    charge_ended: bool | None = None
     charging_mode: ChargingMode | None = None
     charge_current_a: float | None = None
     charge_voltage_v: float | None = None
@@ -279,7 +328,8 @@ class VehicleStatus:
     rear_left_window_open: bool | None = None
     rear_right_window_open: bool | None = None
     # airConditionAccessors airConditionAntivirusMode: 1 while sterilisation runs (the car
-    # also runs the A/C hot), 0 otherwise (Aion UT)
+    # also runs the A/C hot), 0 otherwise, 3 once a run has finished (Aion UT, 2026-10-17).
+    # 4 is read as interrupted: GAC's alert list numbers finished 3 and interrupted 4.
     sterilisation_on: bool | None = None
     # lightAccessors (see LIGHTS): light 2 is on with the dipped headlights, 3 with the high
     # beams, 5 with the rear fog light, 6 with either turn indicator or the hazard lights
@@ -502,6 +552,8 @@ class VehicleStatus:
                 comparisons.append(calendar == timestamp)
         if _window_not_set(chg):
             clocks = [None, None]
+        elif (undated := undated_window(chg)) is not None:
+            clocks = [f"{hour:02d}:{minute:02d}" for hour, minute in undated]
         end_type = _exact_int(chg.get("chargingEndType"))
         range_km = _bounded(drv.get("remainVoyageCourse"), 0) if _not_invalid(drv, "remainVoyageCourseFlag") else None
         cabin_temp = _num(env.get("temperatureInsideCar")) if _not_invalid(env, "temperatureInsideCarFlag") else None
@@ -513,10 +565,14 @@ class VehicleStatus:
             power_mode=vehicle_power,
             soc=round(soc * 100, 1) if soc is not None else None,
             range_km=range_km,
-            # chargingStatus (Aion UT, 2026-10-16): 1 plugged in with the charger off, 2 charging,
-            # 4 plugged in once a one-time window had ended, 23 briefly after the connector was
-            # unlocked, 27 waiting for a scheduled start (the screen's "Scheduled charge waiting").
-            charging={0: False, 1: False, 2: True, 4: False, 23: False, 27: False}.get(
+            # chargingStatus (Aion UT, 2026-10-16/17): 0 not charging (also unplugged), 1 plugged
+            # in with the charger's supply off, 2 charging, 4 plugged in once a one-time window had
+            # ended, 7 once just before a window's start and once the supply was switched off while
+            # charging, 23 after the connector was unlocked, 27 waiting for a scheduled start (the
+            # screen's "Scheduled charge waiting").
+            charging={0: False, 1: False, 2: True, 4: False, 7: False, 23: False, 27: False}.get(
+                _exact_int(chg.get("chargingStatus"))),
+            charge_ended={0: True, 1: False, 2: False, 4: True, 7: False, 23: True, 27: False}.get(
                 _exact_int(chg.get("chargingStatus"))),
             charging_mode=ChargingMode(mode) if mode in (0, 1, 2) else None,
             charge_current_a=cur,
@@ -544,7 +600,8 @@ class VehicleStatus:
             high_beam_on=lights_by_name["high_beam"],
             rear_fog_on=lights_by_name["rear_fog"],
             turn_signal_on=lights_by_name["turn_signal"],
-            sterilisation_on={0: False, 1: True}.get(_exact_int(air.get("airConditionAntivirusMode"))),
+            sterilisation_on={0: False, 1: True, 3: False, 4: False}.get(
+                _exact_int(air.get("airConditionAntivirusMode"))),
             brake_fluid_low=brake_fluid_low(),
             sunroof_open=any_open("sunroofAccessors", "openMode"),
             tyres=tyres,
