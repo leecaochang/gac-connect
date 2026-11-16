@@ -124,7 +124,13 @@ REGIONS: Final[dict[str, dict[str, str]]] = {
 DEFAULT_REGION: Final = "AU"
 
 # Header identity the gateway expects (Android client profile).
-APP_VERSION: Final = "2.0.25"
+# The version header is not signed (see signing.MAIN_FIELDS), so the gateway reads it
+# in the clear and gates code sends on it: a send advertising an older release is
+# refused with 1004002015 ("Verification code sending failed. Please try again later.
+# (1001)", exSrcApp bff-aia-support) after the puzzle check has already passed, while a
+# byte-identical send advertising the value below is accepted and delivers the code.
+# Verified on an AU account against the version the account's own app reports.
+APP_VERSION: Final = "2.0.33"
 MAIN_APP_ID: Final = "app-android"
 IOV_APP_ID: Final = "2"
 # IoV subsystem app id, per profile. GAC International runs the IoV subsystem
